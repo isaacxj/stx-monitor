@@ -1,0 +1,116 @@
+# The plan for stx-server: every app, deployed or not.
+#
+# Each app is matched to a running container by, in order:
+#   1. a container label  stx.app=<id>
+#   2. the container name (container: below, or the id)
+#   3. the docker compose service name
+# Apps with no matching container show as "planned".
+#
+# links: ids of the apps this one talks to.
+
+groups:
+  - id: infrastructure
+    name: Infrastructure
+  - id: media
+    name: Media
+  - id: personal
+    name: Personal apps
+  - id: monitoring
+    name: Monitoring
+
+apps:
+  # Monitoring
+  - id: stx-monitor
+    name: stx-monitor
+    group: monitoring
+    description: This console
+    port: 8090
+    container: stx-monitor
+    links: [docker-proxy]
+
+  - id: docker-proxy
+    name: Socket proxy
+    group: monitoring
+    description: Read-only gate to the Docker API
+    container: stx-docker-proxy
+
+  - id: ntfy
+    name: ntfy
+    group: monitoring
+    description: Push alerts to my iPhone
+    port: 2586
+    container: ntfy
+
+  # Infrastructure
+  - id: caddy
+    name: Caddy
+    group: infrastructure
+    description: HTTPS and subdomains for every app
+    port: 443
+    container: caddy
+
+  - id: backups
+    name: Backups
+    group: infrastructure
+    description: Nightly restic backups of app configs
+    container: restic
+
+  # Media
+  - id: jellyfin
+    name: Jellyfin
+    group: media
+    description: Streams movies and shows, Quick Sync transcoding
+    port: 8096
+    container: jellyfin
+
+  - id: jellyseerr
+    name: Jellyseerr
+    group: media
+    description: Request movies and shows
+    port: 5055
+    container: jellyseerr
+    links: [sonarr, radarr, jellyfin]
+
+  - id: sonarr
+    name: Sonarr
+    group: media
+    description: Finds and organizes TV shows
+    port: 8989
+    container: sonarr
+    links: [prowlarr, qbittorrent]
+
+  - id: radarr
+    name: Radarr
+    group: media
+    description: Finds and organizes movies
+    port: 7878
+    container: radarr
+    links: [prowlarr, qbittorrent]
+
+  - id: prowlarr
+    name: Prowlarr
+    group: media
+    description: Manages indexers for Sonarr and Radarr
+    port: 9696
+    container: prowlarr
+
+  - id: qbittorrent
+    name: qBittorrent
+    group: media
+    description: Downloads, only through the VPN
+    port: 8080
+    container: qbittorrent
+    links: [gluetun]
+
+  - id: gluetun
+    name: Gluetun
+    group: media
+    description: VPN tunnel for downloads
+    container: gluetun
+
+  # Personal apps
+  - id: opengym
+    name: openGym
+    group: personal
+    description: Gym tracker for my iPhone
+    container: opengym
