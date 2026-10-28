@@ -294,7 +294,9 @@ class FailureReports:
 
 
 def _brief(report: dict) -> dict:
-    return {k: report[k] for k in ("id", "time", "kind", "target", "title", "summary", "seen")}
+    out = {k: report[k] for k in ("id", "time", "kind", "target", "title", "summary", "seen")}
+    out["cause"] = (report.get("data") or {}).get("cause")
+    return out
 
 
 def _epoch(value) -> float | None:

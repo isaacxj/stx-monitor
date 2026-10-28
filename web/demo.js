@@ -203,6 +203,79 @@ function logsFor(name, tail) {
   return lines.slice(-tail).map(([a, text]) => ({ ts: iso(a), stream: /Error/.test(text) ? 'stderr' : 'stdout', text }));
 }
 
+// ------------------------------------------------------------- logs, reports
+const LOG_SOURCES = ['kernel', 'systemd', 'dockerd', 'tailscaled', 'radarr', 'sonarr', 'jellyfin', 'prowlarr', 'stx-monitor'];
+function logLine(id, agoS, source, level, text) {
+  const host = !CONTAINERS[source] && source !== 'stx-monitor' && !['radarr', 'sonarr', 'jellyfin', 'prowlarr'].includes(source);
+  return { id, ts: T0 - agoS, origin: host ? 'host' : 'container', source, unit: source === 'dockerd' ? 'docker.service' : null, level, text };
+}
+const LOGS = [
+  [14 * 60 + 20, 'kernel', 'info', 'enp3s0: link up at 1000 Mb/s'],
+  [13 * 60 + 40, 'dockerd', 'info', 'radarr: health check passed'],
+  [12 * 60 + 40, 'radarr', 'warn', 'Library scan is using 1.9 GB of memory'],
+  [12 * 60 + 12, 'radarr', 'error', 'Out of memory while reading media info'],
+  [12 * 60 + 12, 'kernel', 'error', 'Memory cgroup out of memory: Killed process 48211 (Radarr)'],
+  [12 * 60 + 11, 'dockerd', 'warn', 'radarr exited with code 137'],
+  [12 * 60 + 11, 'stx-monitor', 'info', 'Saved a failure report for radarr'],
+  [11 * 60 + 40, 'sonarr', 'info', 'RSS sync found 14 new releases'],
+  [11 * 60 + 18, 'tailscaled', 'info', 'iPhone connected over cellular'],
+  [10 * 60 + 50, 'systemd', 'info', 'Started Daily apt upgrade and clean activities.'],
+  [10 * 60 + 11, 'jellyfin', 'info', 'Playback started on Living room TV, direct play'],
+  [10 * 60 + 7, 'prowlarr', 'info', 'Search finished in 1.2 s across 3 indexers'],
+  [9 * 60 + 42, 'stx-monitor', 'info', 'isaac signed in from iPhone'],
+  [9 * 60 + 20, 'systemd', 'info', 'apt-daily-upgrade.service: Deactivated successfully.'],
+  [6 * 60, 'sonarr', 'warn', 'Indexer Nyaa is responding slowly (2.1 s)'],
+  [3 * 60, 'jellyfin', 'info', 'Transcode finished: hardware (Quick Sync)'],
+].map(([a, src, lvl, text], i) => logLine(i + 1, a, src, lvl, text));
+
+const REPORTS = [
+  { id: 3, time: T0 - 12 * 60, kind: 'container', target: 'radarr', title: 'Radarr ran out of memory', seen: false,
+    summary: 'It went over its 2.0 GB memory limit, so Linux stopped it. It has happened 3 times today.',
+    data: { container: { id: 'f5a8c2e19b47', name: 'radarr', image: 'lscr.io/linuxserver/radarr:latest' }, cause: 'Out of memory',
+      exit_code: 137, oom: true, ran_for: 27 * 3600, memory_limit: 2 * GiB, stats: { cpu: 34, mem: 1.98 * GiB }, repeats_today: 3,
+      suggestions: ["Raise Radarr's memory limit to 3 GB in its compose file (mem_limit), or find what pushes it over the limit. Big library scans are a common cause.",
+        'This has happened 3 times today. Fix the cause before starting it again, or it will keep failing.'],
+      logs: LOGS.filter((l) => l.source === 'radarr').map((l) => ({ ts: new Date(l.ts * 1000).toISOString(), stream: 'stdout', text: l.text })) } },
+  { id: 2, time: T0 - 8 * 3600, kind: 'host', target: 'server', title: 'Server went offline', seen: false,
+    summary: 'The battery ran out. It was off for 17 min.',
+    data: { cause: 'The battery ran out', offline_seconds: 17 * 60, went_dark: T0 - 8 * 3600, back: T0 - 8 * 3600 + 17 * 60,
+      timeline: [
+        { time: T0 - 8 * 3600 - 72 * 60, what: 'Running on battery. Wall power may be out. Battery at 80%.', tone: 'amber' },
+        { time: T0 - 8 * 3600, what: 'Last log line. No clean shutdown.', tone: 'red' },
+        { time: T0 - 8 * 3600 + 17 * 60, what: 'Server started again.', tone: 'cyan' }],
+      last_lines: [
+        { ts: T0 - 8 * 3600 - 85, source: 'stx-monitor', level: 'warn', text: 'Battery at 3%' },
+        { ts: T0 - 8 * 3600 - 12, source: 'kernel', level: 'error', text: 'ACPI: battery critically low' },
+        { ts: T0 - 8 * 3600, source: 'kernel', level: 'info', text: 'PM: suspend entry (deep)' }],
+      suggestions: ['Turn on power-outage autopilot so it shuts down cleanly instead of losing power mid-write.'] } },
+  { id: 1, time: T0 - 18 * 3600, kind: 'container', target: 'sonarr', title: 'Sonarr crashed', seen: true,
+    summary: 'It crashed inside the program (exit code 139, a segmentation fault).',
+    data: { container: { id: 'd0e7a3b5c911', name: 'sonarr', image: 'lscr.io/linuxserver/sonarr:latest' }, exit_code: 139, oom: false,
+      stats: { cpu: 3, mem: 190e6 }, suggestions: ['Update the image, or go back to the previous version if this started after an update.'], logs: [] } },
+];
+
+const HISTORY = [
+  { id: 4, started: T0 - 26 * 60, actor: 'isaac', device: 'iPhone, Safari', action: 'restart', target: 'sonarr', status: 'ok', detail: 'Restarted in 4 s' },
+  { id: 3, started: T0 - 20 * 3600, actor: 'isaac', device: 'Windows PC, Edge', action: 'update', target: 'jellyfin', status: 'ok', detail: 'Updated to a new image' },
+  { id: 2, started: T0 - 21 * 3600, actor: 'isaac', device: 'Windows PC, Edge', action: 'prune-images', target: 'server', status: 'ok', detail: 'Freed 1.4GB' },
+  { id: 1, started: T0 - 3 * 86400, actor: 'isaac', device: 'iPhone, Safari', action: 'autopilot', target: 'server', status: 'ok', detail: 'Power-outage autopilot on, shut down at 20%' },
+];
+let autopilot = { enabled: true, threshold: 20 };
+const updates = { c94d1f0a6b22: { available: true, checked: T0 - 3600 } };
+
+function controlView() {
+  const prot = new Set(['stx-monitor', 'stx-docker-proxy']);
+  return {
+    capabilities: { control: true, helper: true },
+    containers: containerList().map((c) => {
+      const app = PLAN.find((p) => CONTAINERS[p.id]?.name === c.name);
+      const actions = c.state === 'running' ? (prot.has(c.name) ? ['restart'] : ['restart', 'stop', 'update']) : ['start'];
+      return { id: c.id, name: c.name, app: app?.id, display: app?.name || c.name, state: c.state, status: c.status, health: null, protected: prot.has(c.name), actions, update: updates[c.id] || null };
+    }),
+    autopilot, prune_bytes: 3.2 * GiB, history: HISTORY, hostname: 'stx-server',
+  };
+}
+
 export function createDemo() {
   let current = host();
   const history = makeHistory();
@@ -227,7 +300,30 @@ export function createDemo() {
           build: { sha: '3f2a9c1', version: '0.1.0', started: T0 - 142 * 60 },
           power_rate: 0.15,
           owner: 'Isaac',
+          reports: { unseen: REPORTS.filter((r) => !r.seen).length, recent: REPORTS.map(({ data, ...r }) => ({ ...r, cause: data.cause })) },
         };
+      }
+      if (path.startsWith('api/session')) return { authenticated: true, user: 'isaac', csrf: 'demo', device: 'iPhone, Safari', has_password: true, passkeys: 1, locked_for: 0 };
+      if (path.startsWith('api/control')) return controlView();
+      if (path.startsWith('api/auth/account')) {
+        return { user: 'isaac', passkeys: [{ id: 'k1', name: 'iPhone', created: T0 - 5 * 86400, last_used: T0 - 600 }],
+          sessions: [{ current: true, device: 'iPhone, Safari', ip: '100.92.41.8', created: T0 - 3600, last_seen: T0, method: 'passkey', remember: true },
+            { current: false, device: 'Windows PC, Edge', ip: '100.88.3.17', created: T0 - 86400, last_seen: T0 - 20 * 3600, method: 'password', remember: true }],
+          sign_ins: [{ time: T0 - 600, ok: 1, method: 'passkey', device: 'iPhone, Safari', ip: '100.92.41.8' },
+            { time: T0 - 20 * 3600, ok: 1, method: 'password', device: 'Windows PC, Edge', ip: '100.88.3.17' }] };
+      }
+      if (path.startsWith('api/reports/')) {
+        const rep = REPORTS.find((r) => r.id === Number(path.split('/')[2]));
+        if (!rep) throw new Error('404 no such report');
+        rep.seen = true;
+        return rep;
+      }
+      if (path.startsWith('api/logs')) {
+        const q = new URLSearchParams(path.split('?')[1] || '');
+        const src = q.get('source') || 'all', lvl = q.get('level') || 'all', text = (q.get('q') || '').toLowerCase();
+        const lines = LOGS.filter((l) => (src === 'all' || (src === 'server' && l.origin === 'host') || (src === 'docker' && l.source === 'dockerd') || l.source === src)
+          && (lvl === 'all' || (lvl === 'error' ? l.level === 'error' : l.level !== 'info')) && (!text || l.text.toLowerCase().includes(text)));
+        return { lines, matched: lines.length + 2400, total: 2418, containers: ['jellyfin', 'prowlarr', 'radarr', 'sonarr', 'stx-docker-proxy', 'stx-monitor'], journal: true };
       }
       const m = /^api\/containers\/([^/?]+)(\/logs)?(?:\?tail=(\d+))?/.exec(path);
       if (m) {
@@ -250,7 +346,32 @@ export function createDemo() {
       }
       throw new Error(`demo: no data for ${path}`);
     },
+    async post(path, body) {
+      await new Promise((r) => setTimeout(r, 120));
+      if (path === 'api/actions') {
+        if (body.action === 'reboot' && body.confirm !== 'stx-server') throw new Error('Type stx-server to confirm the reboot');
+        const row = { id: HISTORY.length + 1, started: now(), actor: 'isaac', device: 'iPhone, Safari', action: body.action, target: body.target || 'server', status: 'running', detail: '' };
+        HISTORY.unshift(row);
+        setTimeout(() => {
+          Object.assign(row, { status: 'ok', finished: now(), detail: body.action === 'prune-images' ? 'Freed 3.2GB' : 'Done in 3 s (demo: nothing really happened)' });
+          this.handlers?.action?.({ ...row });
+        }, 2500);
+        return { ...row };
+      }
+      if (path === 'api/autopilot') { autopilot = { enabled: body.enabled, threshold: body.threshold }; return autopilot; }
+      if (path === 'api/auth/logout') return { ok: true };
+      return { ok: true, started: true, signed_out: 1 };
+    },
+    followLogs(ui, add) {
+      const timer = setInterval(() => {
+        const src = LOG_SOURCES[Math.floor(rnd() * LOG_SOURCES.length)];
+        if (ui.logSource !== 'all' && ui.logSource !== src) return;
+        add([logLine(Math.round(now() * 1000), 0, src, 'info', src === 'jellyfin' ? 'Request served in 12 ms' : 'Health check passed')]);
+      }, 2500);
+      return { close: () => clearInterval(timer) };
+    },
     subscribe(handlers) {
+      this.handlers = handlers;
       setInterval(() => {
         current = host();
         const containers = containerList();

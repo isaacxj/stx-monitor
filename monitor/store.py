@@ -179,7 +179,8 @@ class Store:
 
     def list_reports(self, limit: int = 50) -> list[dict]:
         rows = self._all(
-            "SELECT id, time, kind, target, title, summary, seen FROM failure_reports ORDER BY time DESC LIMIT ?",
+            "SELECT id, time, kind, target, title, summary, seen, json_extract(data, '$.cause') AS cause "
+            "FROM failure_reports ORDER BY time DESC LIMIT ?",
             (limit,),
         )
         return [{**r, "seen": bool(r["seen"])} for r in rows]

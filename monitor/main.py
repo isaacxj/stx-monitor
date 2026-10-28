@@ -271,13 +271,13 @@ async def session_info(request: Request) -> dict:
         "has_password": auth.has_password(),
         "passkeys": len(auth.store.list_passkeys()),
         "locked_for": auth.locked_for(),
-        "secure_context_hint": request.url.scheme == "https" or bool(request.headers.get("x-forwarded-proto") == "https"),
+        "hostname": collector(request).host.identity.get("hostname"),
     }
     if auth.disabled:
-        return {**base, "authenticated": True, "user": "dev", "csrf": "dev"}
+        return {**base, "authenticated": True, "user": "dev", "csrf": "dev", "device": client_of(request).device}
     if not session:
         return {**base, "authenticated": False}
-    return {**base, "authenticated": True, "user": auth.username(), "csrf": session["csrf"],
+    return {**base, "authenticated": True, "user": auth.username(), "csrf": session["csrf"], "device": session["device"],
             "method": session["method"], "remember": bool(session["remember"]), "expires": session["expires"]}
 
 
