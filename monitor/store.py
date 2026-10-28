@@ -192,6 +192,9 @@ class Store:
         row["seen"] = bool(row["seen"])
         return row
 
+    def update_report(self, report_id: int, data: dict) -> None:
+        self._exec("UPDATE failure_reports SET data = ? WHERE id = ?", (json.dumps(data), report_id))
+
     def mark_report_seen(self, report_id: int) -> None:
         self._exec("UPDATE failure_reports SET seen = 1 WHERE id = ?", (report_id,))
 

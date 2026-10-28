@@ -23,6 +23,7 @@ from .history import History
 from .host import HostCollector
 from .journal import Journal
 from .logs import LogHub
+from .reports import FailureReports, read_boot_id
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -157,6 +158,10 @@ class Collector:
         self.edges = HostEdges()
         self.journal = Journal(settings.host_root)
         self.logs = LogHub()
+        self.reports = FailureReports(self)
+        self.actions = None  # set by main once the action runner exists
+        self._readings_at = 0.0
+        self.boot_id: str | None = None
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
         self.subscribers: set[asyncio.Queue] = set()
         self.host_sample: dict | None = None
@@ -192,6 +197,7 @@ class Collector:
             asyncio.create_task(self._every(TAILSCALE_EVERY, self._tailscale_once), name="tailscale"),
             asyncio.create_task(self._every(PERSIST_EVERY, self._persist), name="persist"),
             asyncio.create_task(self.logs.follow_journal(self.journal), name="journal"),
+            asyncio.create_task(self._check_previous_boot(), name="previous-boot"),
         ]
         if self.docker:
             self._tasks.append(asyncio.create_task(
@@ -236,6 +242,8 @@ class Collector:
         })
         for ev in self.edges.check(s):
             self.add_event(ev)
+        if s["time"] - self._readings_at >= 30:
+            self._save_readings(s)
         self.apps_file.reload_if_changed()
         self.broadcast("tick", {
             "host": s,
@@ -283,6 +291,11 @@ class Collector:
         nice = docker_event_to_event(ev)
         if nice:
             self.add_event(nice)
+        if ev.get("action") == "die":
+            try:
+                await self.reports.container_died(ev)
+            except Exception:  # noqa: BLE001
+                log.exception("could not save a failure report for %s", ev.get("name"))
         self._docker_refresh.set()  # refresh the container list now rather than in 6 s
 
     async def _tty_of(self, cid: str) -> bool:
@@ -307,6 +320,42 @@ class Collector:
         m = build_map(self.apps_file.groups, self.apps_file.apps, self.containers, self.stats)
         m["error"] = self.apps_file.error
         return m
+
+    def app_for_container(self, cid: str) -> dict | None:
+        for g in self.apps_map()["groups"]:
+            for a in g["apps"]:
+                if a.get("container") and a["container"]["id"] == cid[:12]:
+                    return a
+        return None
+
+    def app_name(self, app_id: str) -> str:
+        for a in self.apps_file.apps:
+            if a["id"] == app_id:
+                return a["name"]
+        return app_id
+
+    def _save_readings(self, s: dict) -> None:
+        """The last battery, power and heat readings, so a crash report can say what led up to it."""
+        self._readings_at = s["time"]
+        if self.boot_id is None:
+            self.boot_id = read_boot_id(self)
+        ps = s.get("power_supply") or {}
+        self.store.set("last_readings", {
+            "time": s["time"],
+            "boot": self.boot_id,
+            "ac": ps.get("ac_online"),
+            "battery": (ps.get("battery") or {}).get("capacity"),
+            "temp": s.get("cpu_temp"),
+            "watts": (s.get("power") or {}).get("watts"),
+        })
+
+    async def _check_previous_boot(self) -> None:
+        try:
+            report = await self.reports.check_previous_boot()
+            if report:
+                log.warning("previous boot ended without a clean shutdown: %s", report["summary"])
+        except Exception:  # noqa: BLE001
+            log.exception("could not check the previous boot")
 
     def find_container(self, key: str) -> dict | None:
         for c in self.containers:
@@ -367,6 +416,7 @@ class Collector:
             "tailnet": self.tailnet,
             "docker": self.docker_state(),
             "build": {"sha": self.settings.git_sha, "version": __version__, "started": self.started},
+            "reports": self.reports.summary(),
             "power_rate": self.settings.power_rate,
             "owner": self.settings.owner,
         }

@@ -143,6 +143,23 @@ async def container_logs(request: Request, key: str, tail: int = Query(200, ge=1
     return {"id": c["id"], "name": c["name"], "lines": lines}
 
 
+@app.get("/api/reports")
+async def reports(request: Request) -> dict:
+    return collector(request).reports.summary()
+
+
+@app.get("/api/reports/{report_id}")
+async def report(request: Request, report_id: int) -> dict:
+    col = collector(request)
+    found = col.store.get_report(report_id)
+    if not found:
+        raise HTTPException(404, "no such report")
+    if not found["seen"]:
+        col.store.mark_report_seen(report_id)
+        col.broadcast("reports", {"unseen": col.store.unseen_reports()})
+    return found
+
+
 LOG_SOURCE = re.compile(r"^(all|server|docker|[A-Za-z0-9][A-Za-z0-9_.-]{0,127})$")
 LEVELS = ("all", "warn", "error")
 
