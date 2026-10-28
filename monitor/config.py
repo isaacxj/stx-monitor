@@ -47,6 +47,8 @@ class Settings:
     power_rate: float
     git_sha: str
     web_dir: Path
+    # Optional first name for the greeting on the overview page.
+    owner: str
 
     @property
     def docker_enabled(self) -> bool:
@@ -64,6 +66,7 @@ def load() -> Settings:
         power_rate=_float("STX_POWER_RATE", 0.15),
         git_sha=os.environ.get("STX_GIT_SHA", "dev"),
         web_dir=Path(os.environ.get("STX_WEB_DIR", REPO_DIR / "web")),
+        owner=os.environ.get("STX_OWNER", ""),
     )
 
 

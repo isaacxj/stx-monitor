@@ -352,4 +352,5 @@ class Collector:
             "docker": self.docker_state(),
             "build": {"sha": self.settings.git_sha, "version": __version__, "started": self.started},
             "power_rate": self.settings.power_rate,
+            "owner": self.settings.owner,
         }
