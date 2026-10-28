@@ -51,6 +51,12 @@ class Settings:
     web_dir: Path
     # Optional first name for the greeting on the overview page.
     owner: str
+    # The HTTPS address you open the console at, e.g. https://stx-server.tail1234.ts.net.
+    # Optional: the Tailscale name is picked up automatically.
+    public_url: str
+    # Development only: turn sign-in off, or allow the session cookie over plain HTTP.
+    auth_disabled: bool
+    insecure_cookie: bool
 
     @property
     def docker_enabled(self) -> bool:
@@ -70,6 +76,9 @@ def load() -> Settings:
         git_sha=os.environ.get("STX_GIT_SHA", "dev"),
         web_dir=Path(os.environ.get("STX_WEB_DIR", REPO_DIR / "web")),
         owner=os.environ.get("STX_OWNER", ""),
+        public_url=os.environ.get("STX_PUBLIC_URL", "").rstrip("/"),
+        auth_disabled=os.environ.get("STX_AUTH", "on").lower() in ("off", "0", "false", "no"),
+        insecure_cookie=os.environ.get("STX_INSECURE_COOKIE", "").lower() in ("1", "true", "yes"),
     )
 
 

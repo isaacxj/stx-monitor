@@ -1,6 +1,8 @@
 """HTTP API and static web UI.
 
-Everything here is read-only: there is no endpoint that changes the server.
+Everything under /api needs a signed-in session, except the health check and
+the sign-in endpoints themselves. Every request that changes something must
+come from our own page (Origin check) and carry the session's CSRF token.
 """
 
 from __future__ import annotations
@@ -11,15 +13,17 @@ import logging
 import re
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
 from .actions import ActionError
+from .auth import COOKIE, REMEMBER_SECONDS, Auth, AuthError, Client, device_name
 from .collector import Collector
 from .config import settings
 from .logs import to_text
@@ -38,6 +42,11 @@ CONTAINER_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 async def lifespan(app: FastAPI):
     collector = Collector(settings)
     app.state.collector = collector
+    app.state.auth = Auth(collector.store, disabled=settings.auth_disabled)
+    if settings.auth_disabled:
+        log.warning("STX_AUTH=off: sign-in is disabled. Never run like this outside development.")
+    elif not app.state.auth.has_password():
+        log.warning("No password set yet. Run: docker exec -it stx-monitor python -m monitor set-password")
     await collector.start()
     log.info("stx-monitor %s (%s) on %s:%s, host root %s, docker %s",
              __version__, settings.git_sha, settings.bind, settings.port, settings.host_root, settings.docker_host)
@@ -52,6 +61,72 @@ app = FastAPI(title="stx-monitor", version=__version__, docs_url=None, redoc_url
 
 def collector(request: Request) -> Collector:
     return request.app.state.collector
+
+
+PUBLIC_API = {"/api/health", "/api/session", "/api/auth/login", "/api/auth/passkey/begin", "/api/auth/passkey/finish"}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def allowed_origins(request: Request) -> set[str]:
+    """The addresses this console is legitimately served from."""
+    out = set()
+    if settings.public_url:
+        out.add(settings.public_url.lower())
+    tailnet = getattr(request.app.state, "collector", None) and request.app.state.collector.tailnet
+    for d in (tailnet or {}).get("devices", []):
+        if d.get("self") and d.get("dns_name"):
+            out.add(f"https://{d['dns_name']}".lower())
+    for header in ("host", "x-forwarded-host"):
+        host = request.headers.get(header)
+        if host:
+            out.add(f"https://{host}".lower())
+            if settings.insecure_cookie:
+                out.add(f"http://{host}".lower())
+    return out
+
+
+def checked_origin(request: Request) -> str | None:
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if not origin or origin.lower() not in allowed_origins(request):
+        return None
+    return origin
+
+
+def client_of(request: Request) -> Client:
+    ip = request.client.host if request.client else ""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded and ip in ("127.0.0.1", "::1"):
+        ip = forwarded.split(",")[0].strip()  # tailscale serve passes the real address along
+    device = device_name(request.headers.get("user-agent", ""))
+    login = request.headers.get("tailscale-user-login")
+    if login:
+        device = f"{device} ({login})"
+    return Client(ip=ip[:64], device=device[:120])
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+    auth: Auth = request.app.state.auth
+    unsafe = request.method not in SAFE_METHODS
+    if unsafe and not checked_origin(request):
+        return JSONResponse({"detail": "This request did not come from the console's own page."}, status_code=403)
+    if auth.disabled:
+        request.state.user, request.state.device = "dev", client_of(request).device
+        return await call_next(request)
+    session = auth.session(request.cookies.get(COOKIE))
+    if session:
+        request.state.session = session
+        request.state.user = auth.username() or "you"
+        request.state.device = session["device"]
+    if path not in PUBLIC_API:
+        if not session:
+            return JSONResponse({"detail": "Sign in first."}, status_code=401)
+        if unsafe and not auth.csrf_ok(session, request.headers.get("x-csrf-token")):
+            return JSONResponse({"detail": "Missing or wrong CSRF token. Reload the page."}, status_code=403)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -145,6 +220,163 @@ async def container_logs(request: Request, key: str, tail: int = Query(200, ge=1
     return {"id": c["id"], "name": c["name"], "lines": lines}
 
 
+# ------------------------------------------------------------------- sign-in
+class LoginBody(BaseModel):
+    username: str
+    password: str
+    remember: bool = False
+
+
+class PasskeyFinishBody(BaseModel):
+    flow: str
+    credential: dict
+    remember: bool = False
+    name: str = ""
+
+
+def _set_cookie(response: Response, token: str, remember: bool) -> None:
+    response.set_cookie(
+        COOKIE, token, max_age=REMEMBER_SECONDS if remember else None, httponly=True,
+        secure=not settings.insecure_cookie, samesite="strict", path="/",
+    )
+
+
+def _signed_in(request: Request, method: str, remember: bool, detail: str = "") -> JSONResponse:
+    auth: Auth = request.app.state.auth
+    client = client_of(request)
+    token, session = auth.create_session(remember, method, client)
+    user = auth.username() or "you"
+    via = "a passkey" if method == "passkey" else "the password"
+    collector(request).add_event({"kind": "security", "level": "info", "title": f"{user} signed in from {client.device}",
+                                  "detail": f"With {via}{f' ({detail})' if detail else ''}, from {client.ip}."})
+    response = JSONResponse({"ok": True, "user": user, "csrf": session["csrf"]})
+    _set_cookie(response, token, remember)
+    return response
+
+
+def _failed(request: Request, exc: AuthError) -> JSONResponse:
+    client = client_of(request)
+    level = "error" if exc.status == 429 else "warn"
+    title = "Sign-in paused for 15 minutes" if exc.status == 429 else f"Failed sign-in from {client.device}"
+    collector(request).add_event({"kind": "security", "level": level, "title": title, "detail": f"{exc} From {client.ip}."})
+    return JSONResponse({"detail": str(exc), "locked_for": request.app.state.auth.locked_for()}, status_code=exc.status)
+
+
+@app.get("/api/session")
+async def session_info(request: Request) -> dict:
+    auth: Auth = request.app.state.auth
+    session = getattr(request.state, "session", None)
+    base = {
+        "auth_disabled": auth.disabled,
+        "has_password": auth.has_password(),
+        "passkeys": len(auth.store.list_passkeys()),
+        "locked_for": auth.locked_for(),
+        "secure_context_hint": request.url.scheme == "https" or bool(request.headers.get("x-forwarded-proto") == "https"),
+    }
+    if auth.disabled:
+        return {**base, "authenticated": True, "user": "dev", "csrf": "dev"}
+    if not session:
+        return {**base, "authenticated": False}
+    return {**base, "authenticated": True, "user": auth.username(), "csrf": session["csrf"],
+            "method": session["method"], "remember": bool(session["remember"]), "expires": session["expires"]}
+
+
+@app.post("/api/auth/login")
+async def login(request: Request, body: LoginBody):
+    auth: Auth = request.app.state.auth
+    if not auth.has_password():
+        return JSONResponse({"detail": "No password is set yet. Set one on the server with: "
+                                       "docker exec -it stx-monitor python -m monitor set-password"}, status_code=409)
+    try:
+        auth.password_sign_in(body.username[:64], body.password[:256], client_of(request))
+    except AuthError as exc:
+        return _failed(request, exc)
+    return _signed_in(request, "password", body.remember)
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    request.app.state.auth.end_session(request.cookies.get(COOKIE))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(COOKIE, path="/", secure=not settings.insecure_cookie, httponly=True, samesite="strict")
+    return response
+
+
+def _rp(request: Request) -> tuple[str, str]:
+    origin = checked_origin(request)
+    if not origin:
+        raise HTTPException(403, "Unknown origin")
+    host = urlsplit(origin).hostname or ""
+    return host, origin
+
+
+@app.post("/api/auth/passkey/begin")
+async def passkey_begin(request: Request):
+    rp_id, _ = _rp(request)
+    try:
+        return request.app.state.auth.begin_authentication(rp_id)
+    except AuthError as exc:
+        return _failed(request, exc)
+
+
+@app.post("/api/auth/passkey/finish")
+async def passkey_finish(request: Request, body: PasskeyFinishBody):
+    _, origin = _rp(request)
+    try:
+        name = request.app.state.auth.finish_authentication(body.flow, body.credential, origin, client_of(request))
+    except AuthError as exc:
+        return _failed(request, exc)
+    return _signed_in(request, "passkey", body.remember, name)
+
+
+@app.post("/api/auth/passkeys/register/begin")
+async def passkey_register_begin(request: Request) -> dict:
+    rp_id, _ = _rp(request)
+    return request.app.state.auth.begin_registration(rp_id)
+
+
+@app.post("/api/auth/passkeys/register/finish")
+async def passkey_register_finish(request: Request, body: PasskeyFinishBody) -> dict:
+    _, origin = _rp(request)
+    try:
+        added = request.app.state.auth.finish_registration(body.flow, body.credential, origin,
+                                                           body.name or client_of(request).device)
+    except AuthError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    collector(request).add_event({"kind": "security", "level": "info", "title": f"Added a passkey: {added['name']}",
+                                  "detail": f"From {client_of(request).device}."})
+    return added
+
+
+@app.get("/api/auth/account")
+async def account(request: Request) -> dict:
+    store = request.app.state.auth.store
+    current = getattr(request.state, "session", None)
+    sessions = [{"current": bool(current and s["id"] == current["id"]), "device": s["device"], "ip": s["ip"],
+                 "created": s["created"], "last_seen": s["last_seen"], "method": s["method"],
+                 "remember": bool(s["remember"])} for s in store.list_sessions()]
+    passkeys = [{k: p[k] for k in ("id", "name", "created", "last_used")} for p in store.list_passkeys()]
+    return {"user": request.app.state.auth.username(), "passkeys": passkeys, "sessions": sessions,
+            "sign_ins": store.recent_sign_ins(15)}
+
+
+@app.post("/api/auth/passkeys/{cred_id}/delete")
+async def passkey_delete(request: Request, cred_id: str) -> dict:
+    if not request.app.state.auth.store.delete_passkey(cred_id[:256]):
+        raise HTTPException(404, "No such passkey")
+    collector(request).add_event({"kind": "security", "level": "info", "title": "Removed a passkey", "detail": ""})
+    return {"ok": True}
+
+
+@app.post("/api/auth/sessions/sign-out-others")
+async def sign_out_others(request: Request) -> dict:
+    current = getattr(request.state, "session", None)
+    n = request.app.state.auth.store.delete_other_sessions(current["id"] if current else "")
+    collector(request).add_event({"kind": "security", "level": "info", "title": f"Signed out {n} other device{'s' * (n != 1)}", "detail": ""})
+    return {"signed_out": n}
+
+
+# -------------------------------------------------------------------- actions
 def actor(request: Request) -> tuple[str, str]:
     """Who is asking, for the history: the signed-in user and their device."""
     return getattr(request.state, "user", "you"), getattr(request.state, "device", "")
