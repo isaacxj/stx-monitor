@@ -1,0 +1,18 @@
+[Unit]
+Description=stx-monitor host helper (shutdown, reboot, Docker restart, image updates)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/stx-monitor/stx-helper.py
+# systemd creates /run/stx-helper (root only) and removes it when the helper stops.
+RuntimeDirectory=stx-helper
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

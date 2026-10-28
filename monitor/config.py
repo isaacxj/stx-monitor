@@ -40,6 +40,8 @@ class Settings:
     host_root: Path
     # tcp://127.0.0.1:2375, unix:///var/run/docker.sock, or "none".
     docker_host: str
+    # The second proxy, which only allows start, stop and restart. "none" turns actions off.
+    docker_control_host: str
     apps_file: Path
     data_dir: Path
     bind: str
@@ -59,9 +61,10 @@ def load() -> Settings:
     return Settings(
         host_root=Path(os.environ.get("STX_HOST_ROOT", "/")),
         docker_host=os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock"),
+        docker_control_host=os.environ.get("STX_DOCKER_CONTROL_HOST", "none"),
         apps_file=_apps_file(),
         data_dir=Path(os.environ.get("STX_DATA_DIR", REPO_DIR / "data")),
-        bind=os.environ.get("STX_BIND", "0.0.0.0"),
+        bind=os.environ.get("STX_BIND", "127.0.0.1"),
         port=_int("STX_PORT", 8090),
         power_rate=_float("STX_POWER_RATE", 0.15),
         git_sha=os.environ.get("STX_GIT_SHA", "dev"),

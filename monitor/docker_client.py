@@ -326,6 +326,26 @@ class DockerClient:
         for key in [k for k in self._inspect if k.startswith(cid) or cid.startswith(k)]:
             self._inspect.pop(key, None)
 
+    async def image_digests(self, ref: str) -> list[str]:
+        """Registry digests of a local image ("repo@sha256:..."). Empty for locally built images."""
+        data = await self._get(f"/images/{ref}/json")
+        return data.get("RepoDigests") or []
+
+    async def remote_digest(self, ref: str) -> str | None:
+        """The digest the registry currently serves for this tag (Docker asks the registry for us)."""
+        data = await self._get(f"/distribution/{ref}/json")
+        return (data.get("Descriptor") or {}).get("digest")
+
+    async def unused_image_bytes(self) -> int | None:
+        """Roughly how much an image cleanup would free: images no container uses."""
+        data = await self._get("/system/df")
+        total = 0
+        for img in data.get("Images") or []:
+            if img.get("Containers", 0) == 0:
+                shared = max(0, img.get("SharedSize") or 0)
+                total += max(0, (img.get("Size") or 0) - shared)
+        return total
+
     async def stats(self, cid: str) -> dict:
         raw = await self._get(f"/containers/{cid}/stats", stream="false", **{"one-shot": "true"})
         return self.tracker.update(cid, raw)

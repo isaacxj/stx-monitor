@@ -16,6 +16,7 @@ from typing import Any
 
 from . import __version__
 from . import tailscale
+from .actions import UPDATE_CHECK_EVERY, Actions
 from .apps import AppsFile, build_map
 from .config import Settings
 from .docker_client import DockerClient
@@ -159,7 +160,7 @@ class Collector:
         self.journal = Journal(settings.host_root)
         self.logs = LogHub()
         self.reports = FailureReports(self)
-        self.actions = None  # set by main once the action runner exists
+        self.actions = Actions(self, settings.docker_control_host)
         self._readings_at = 0.0
         self.boot_id: str | None = None
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
@@ -198,6 +199,7 @@ class Collector:
             asyncio.create_task(self._every(PERSIST_EVERY, self._persist), name="persist"),
             asyncio.create_task(self.logs.follow_journal(self.journal), name="journal"),
             asyncio.create_task(self._check_previous_boot(), name="previous-boot"),
+            asyncio.create_task(self._update_checks(), name="updates"),
         ]
         if self.docker:
             self._tasks.append(asyncio.create_task(
@@ -210,6 +212,7 @@ class Collector:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         await self.logs.stop()
+        await self.actions.close()
         await self._persist()
         if self.docker:
             await self.docker.close()
@@ -244,6 +247,7 @@ class Collector:
             self.add_event(ev)
         if s["time"] - self._readings_at >= 30:
             self._save_readings(s)
+        self.actions.check_autopilot(s)
         self.apps_file.reload_if_changed()
         self.broadcast("tick", {
             "host": s,
@@ -298,6 +302,18 @@ class Collector:
                 log.exception("could not save a failure report for %s", ev.get("name"))
         self._docker_refresh.set()  # refresh the container list now rather than in 6 s
 
+    def request_docker_refresh(self) -> None:
+        self._docker_refresh.set()
+
+    async def _update_checks(self) -> None:
+        await asyncio.sleep(60)  # let everything settle after a start
+        while True:
+            try:
+                await self.actions.check_updates()
+            except Exception:  # noqa: BLE001
+                log.exception("update check failed")
+            await asyncio.sleep(UPDATE_CHECK_EVERY)
+
     async def _tty_of(self, cid: str) -> bool:
         return bool((await self.docker.inspect(cid)).get("tty"))
 
@@ -305,7 +321,8 @@ class Collector:
         self.events_connected = connected
 
     def container_list(self) -> list[dict]:
-        return [{**c, "stats": self.stats.get(c["id"])} for c in self.containers]
+        return [{**c, "stats": self.stats.get(c["id"]), "update": self.actions.updates.get(c["id"])}
+                for c in self.containers]
 
     def docker_state(self) -> dict:
         return {

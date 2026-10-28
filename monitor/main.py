@@ -16,8 +16,10 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import __version__
+from .actions import ActionError
 from .collector import Collector
 from .config import settings
 from .logs import to_text
@@ -141,6 +143,52 @@ async def container_logs(request: Request, key: str, tail: int = Query(200, ge=1
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"docker: {exc}") from exc
     return {"id": c["id"], "name": c["name"], "lines": lines}
+
+
+def actor(request: Request) -> tuple[str, str]:
+    """Who is asking, for the history: the signed-in user and their device."""
+    return getattr(request.state, "user", "you"), getattr(request.state, "device", "")
+
+
+class ActionBody(BaseModel):
+    action: str
+    target: str = ""
+    confirm: str | None = None
+
+
+class AutopilotBody(BaseModel):
+    enabled: bool
+    threshold: int = 20
+
+
+@app.get("/api/control")
+async def control(request: Request) -> dict:
+    return await collector(request).actions.control_view()
+
+
+@app.post("/api/actions", status_code=202)
+async def run_action(request: Request, body: ActionBody) -> dict:
+    col = collector(request)
+    user, device = actor(request)
+    try:
+        return col.actions.request(body.action, body.target, user, device, body.confirm)
+    except ActionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/autopilot")
+async def set_autopilot(request: Request, body: AutopilotBody) -> dict:
+    user, device = actor(request)
+    return collector(request).actions.set_autopilot(body.enabled, body.threshold, user, device)
+
+
+@app.post("/api/updates/check", status_code=202)
+async def check_updates(request: Request) -> dict:
+    col = collector(request)
+    task = asyncio.create_task(col.actions.check_updates())
+    col.actions.tasks.add(task)
+    task.add_done_callback(col.actions.tasks.discard)
+    return {"started": True}
 
 
 @app.get("/api/reports")
