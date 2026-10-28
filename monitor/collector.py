@@ -21,6 +21,7 @@ from .config import Settings
 from .docker_client import DockerClient
 from .history import History
 from .host import HostCollector
+from .store import Store
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ class Collector:
         self.host = HostCollector(settings.host_root, settings.power_rate)
         self.docker = DockerClient(settings.docker_host) if settings.docker_enabled else None
         self.apps_file = AppsFile(settings.apps_file)
+        self.store = Store(settings.data_dir / "monitor.db")
         self.history = History()
         self.edges = HostEdges()
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
@@ -165,15 +167,16 @@ class Collector:
         self._tasks: list[asyncio.Task] = []
         self._docker_refresh = asyncio.Event()
 
-    @property
-    def history_path(self):
-        return self.settings.data_dir / "history.json"
-
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
-        loaded = self.history.load(self.history_path)
+        loaded = self.history.load(self.store)
+        old_json = self.settings.data_dir / "history.json"
+        if not loaded and old_json.exists():
+            loaded = self.history.import_json(old_json)
+            old_json.rename(old_json.with_suffix(".json.imported"))
         if loaded:
             log.info("restored %d minutes of history", loaded)
+        self.events.extend(self.store.recent_events(MAX_EVENTS))
         self.add_event(event("system", "info", "stx-monitor started",
                              f"Build {self.settings.git_sha}, version {__version__}."))
         # Fill everything once before serving so the first page load is complete.
@@ -198,6 +201,7 @@ class Collector:
         await self._persist()
         if self.docker:
             await self.docker.close()
+        self.store.close()
 
     async def _every(self, seconds: float, fn) -> None:
         while True:
@@ -315,14 +319,16 @@ class Collector:
     # ------------------------------------------------------------- persist
     async def _persist(self) -> None:
         try:
-            await asyncio.to_thread(self.history.save, self.history_path)
-        except OSError as exc:
+            await asyncio.to_thread(self.history.save, self.store)
+        except Exception as exc:  # noqa: BLE001
             log.warning("could not save history: %s", exc)
 
     # -------------------------------------------------------------- events
-    def add_event(self, ev: dict) -> None:
+    def add_event(self, ev: dict) -> dict:
+        ev = self.store.add_event(ev)
         self.events.append(ev)
         self.broadcast("event", ev)
+        return ev
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=64)

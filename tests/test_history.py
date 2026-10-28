@@ -1,4 +1,8 @@
+import json
+import time
+
 from monitor.history import FIELDS, History
+from monitor.store import Store
 
 
 def test_minute_rollup():
@@ -24,18 +28,23 @@ def test_live_ring_is_bounded():
 
 
 def test_save_and_reload_drops_old(tmp_path):
+    store = Store(tmp_path / "data" / "monitor.db")
+    now = time.time()
     h = History()
-    now = 1_800_000_000
-    h.day.extend([[now - 25 * 3600, 1, 1, 1, 1, 1, 1], [now - 3600, 2, 2, 2, 2, 2, 2]])
-    path = tmp_path / "data" / "history.json"
-    h.save(path)
+    h.day.extend([[int(now - 25 * 3600), 1, 1, 1, 1, 1, 1], [int(now - 3600), 2, 2, 2, 2, 2, 2]])
+    h.save(store)
     fresh = History()
-    assert fresh.load(path, now=now) == 1
+    assert fresh.load(store, now=now) == 1
     assert fresh.day[0][1] == 2
 
 
-def test_load_missing_or_corrupt(tmp_path):
-    assert History().load(tmp_path / "nope.json") == 0
+def test_import_old_json(tmp_path):
+    now = 1_800_000_000
+    path = tmp_path / "history.json"
+    path.write_text(json.dumps({"fields": ["t", *FIELDS], "day": [[now - 60, 1, 2, 3, 4, 5, 6], [now - 90000, 0, 0, 0, 0, 0, 0]]}))
+    h = History()
+    assert h.import_json(path, now=now) == 1
+    assert History().import_json(tmp_path / "nope.json") == 0
     bad = tmp_path / "bad.json"
     bad.write_text("{not json")
-    assert History().load(bad) == 0
+    assert History().import_json(bad) == 0
