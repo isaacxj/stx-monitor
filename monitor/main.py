@@ -14,12 +14,13 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .collector import Collector
 from .config import settings
+from .logs import to_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("monitor")
@@ -140,6 +141,65 @@ async def container_logs(request: Request, key: str, tail: int = Query(200, ge=1
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"docker: {exc}") from exc
     return {"id": c["id"], "name": c["name"], "lines": lines}
+
+
+LOG_SOURCE = re.compile(r"^(all|server|docker|[A-Za-z0-9][A-Za-z0-9_.-]{0,127})$")
+LEVELS = ("all", "warn", "error")
+
+
+def _log_filter(source: str, level: str, q: str) -> tuple[str, str, str]:
+    if not LOG_SOURCE.match(source) or level not in LEVELS:
+        raise HTTPException(400, "bad filter")
+    return source, level, q[:200]
+
+
+@app.get("/api/logs")
+async def logs(request: Request, source: str = "all", level: str = "all", q: str = "",
+               limit: int = Query(500, ge=1, le=5000)) -> dict:
+    col = collector(request)
+    result = col.logs.query(*_log_filter(source, level, q), limit=limit)
+    return {**result, **col.logs.sources()}
+
+
+@app.get("/api/logs/download")
+async def logs_download(request: Request, source: str = "all", level: str = "all", q: str = "") -> PlainTextResponse:
+    col = collector(request)
+    result = col.logs.query(*_log_filter(source, level, q), limit=5000)
+    name = f"stx-logs-{source}-{time.strftime('%Y%m%d-%H%M')}.txt"
+    return PlainTextResponse(to_text(result["lines"]), headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/logs/stream")
+async def logs_stream(request: Request, source: str = "all", level: str = "all", q: str = "") -> StreamingResponse:
+    """New log lines as they arrive, sent in small batches."""
+    col = collector(request)
+    queue = col.logs.subscribe(*_log_filter(source, level, q))
+
+    async def gen():
+        try:
+            yield "retry: 3000\n\n"
+            idle = 0.0
+            while True:
+                batch = []
+                try:
+                    batch.append(await asyncio.wait_for(queue.get(), 1.0))
+                    idle = 0.0
+                except asyncio.TimeoutError:
+                    idle += 1.0
+                while not queue.empty() and len(batch) < 500:
+                    batch.append(queue.get_nowait())
+                if batch:
+                    yield f"event: lines\ndata: {json.dumps(batch, separators=(',', ':'))}\n\n"
+                elif idle >= KEEPALIVE:
+                    idle = 0.0
+                    if await request.is_disconnected():
+                        break
+                    yield ": keepalive\n\n"
+        finally:
+            col.logs.unsubscribe(queue)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 if settings.web_dir.is_dir():

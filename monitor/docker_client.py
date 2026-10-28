@@ -41,38 +41,60 @@ def parse_docker_host(docker_host: str) -> tuple[str, str | None]:
 
 # ------------------------------------------------------------------------ logs
 
-def demux(data: bytes, tty: bool = False) -> list[tuple[str, str]]:
-    """Split a raw log response into (stream, line) pairs.
+class StreamDemux:
+    """Split Docker's log stream into (stream, line) pairs as bytes arrive.
 
     Without a TTY, Docker multiplexes stdout and stderr onto one connection.
     Every chunk starts with an 8-byte header: one byte for the stream
     (1 = stdout, 2 = stderr), three zero bytes, then the payload length as a
     big-endian 32-bit number. With a TTY there is one stream and no headers.
+    A header or a line can be split across network reads, so this keeps
+    whatever is incomplete until the next feed().
     """
-    if tty:
-        text = data.decode("utf-8", errors="replace")
-        return [("stdout", line) for line in text.splitlines()]
 
-    buffers: dict[str, str] = {}
-    out: list[tuple[str, str]] = []
-    i = 0
-    while i + 8 <= len(data):
-        kind, size = data[i], struct.unpack(">I", data[i + 4:i + 8])[0]
-        if kind not in (0, 1, 2) or data[i + 1:i + 4] != b"\x00\x00\x00":
-            # Not a multiplexed stream after all; treat the rest as plain text.
-            out.extend(("stdout", line) for line in data[i:].decode("utf-8", errors="replace").splitlines())
-            return out
-        stream = "stderr" if kind == 2 else "stdout"
-        chunk = data[i + 8:i + 8 + size].decode("utf-8", errors="replace")
-        i += 8 + size
-        buf = buffers.get(stream, "") + chunk
+    def __init__(self, tty: bool = False):
+        self.tty = tty
+        self.raw = False
+        self.buf = b""
+        self.partial: dict[str, str] = {}
+
+    def _lines(self, stream: str, text: str) -> list[tuple[str, str]]:
+        buf = self.partial.get(stream, "") + text
         *complete, rest = buf.split("\n")
-        out.extend((stream, line) for line in complete)
-        buffers[stream] = rest
-    for stream, rest in buffers.items():
-        if rest:
-            out.append((stream, rest))
-    return out
+        self.partial[stream] = rest
+        return [(stream, line) for line in complete]
+
+    def feed(self, data: bytes) -> list[tuple[str, str]]:
+        if self.tty or self.raw:
+            return self._lines("stdout", data.decode("utf-8", errors="replace"))
+        self.buf += data
+        out: list[tuple[str, str]] = []
+        while len(self.buf) >= 8:
+            kind = self.buf[0]
+            if kind not in (0, 1, 2) or self.buf[1:4] != b"\x00\x00\x00":
+                # Not a multiplexed stream after all; treat everything as plain text.
+                self.raw = True
+                rest, self.buf = self.buf, b""
+                out.extend(self._lines("stdout", rest.decode("utf-8", errors="replace")))
+                return out
+            size = struct.unpack(">I", self.buf[4:8])[0]
+            if len(self.buf) < 8 + size:
+                break
+            chunk = self.buf[8:8 + size].decode("utf-8", errors="replace")
+            self.buf = self.buf[8 + size:]
+            out.extend(self._lines("stderr" if kind == 2 else "stdout", chunk))
+        return out
+
+    def flush(self) -> list[tuple[str, str]]:
+        out = [(stream, rest) for stream, rest in self.partial.items() if rest]
+        self.partial = {}
+        return out
+
+
+def demux(data: bytes, tty: bool = False) -> list[tuple[str, str]]:
+    """Split a complete log response into (stream, line) pairs."""
+    d = StreamDemux(tty)
+    return d.feed(data) + d.flush()
 
 
 def parse_log_lines(pairs: list[tuple[str, str]]) -> list[dict]:
@@ -322,6 +344,22 @@ class DockerClient:
         )
         r.raise_for_status()
         return parse_log_lines(demux(r.content, tty=tty))
+
+    async def stream_logs(self, cid: str, tty: bool, since: float | None = None, tail: int = 100) -> AsyncIterator[dict]:
+        """Follow a container's output, yielding parsed lines until the stream ends."""
+        params: dict[str, Any] = {"stdout": 1, "stderr": 1, "timestamps": 1, "follow": 1}
+        if since:
+            params["since"] = f"{since:.6f}"
+        else:
+            params["tail"] = tail
+        async with self.http.stream("GET", f"/containers/{cid}/logs", params=params, timeout=None) as r:
+            r.raise_for_status()
+            d = StreamDemux(tty)
+            async for chunk in r.aiter_bytes():
+                for line in parse_log_lines(d.feed(chunk)):
+                    yield line
+            for line in parse_log_lines(d.flush()):
+                yield line
 
     async def events(self) -> AsyncIterator[dict]:
         """Yield container events as they happen. Ends when the connection drops."""

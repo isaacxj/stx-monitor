@@ -21,6 +21,8 @@ from .config import Settings
 from .docker_client import DockerClient
 from .history import History
 from .host import HostCollector
+from .journal import Journal
+from .logs import LogHub
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -153,6 +155,8 @@ class Collector:
         self.store = Store(settings.data_dir / "monitor.db")
         self.history = History()
         self.edges = HostEdges()
+        self.journal = Journal(settings.host_root)
+        self.logs = LogHub()
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
         self.subscribers: set[asyncio.Queue] = set()
         self.host_sample: dict | None = None
@@ -187,6 +191,7 @@ class Collector:
             asyncio.create_task(self._docker_loop(), name="docker"),
             asyncio.create_task(self._every(TAILSCALE_EVERY, self._tailscale_once), name="tailscale"),
             asyncio.create_task(self._every(PERSIST_EVERY, self._persist), name="persist"),
+            asyncio.create_task(self.logs.follow_journal(self.journal), name="journal"),
         ]
         if self.docker:
             self._tasks.append(asyncio.create_task(
@@ -198,6 +203,7 @@ class Collector:
         for t in self._tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
+        await self.logs.stop()
         await self._persist()
         if self.docker:
             await self.docker.close()
@@ -260,6 +266,7 @@ class Collector:
             running = [c["id"] for c in containers if c["state"] == "running"]
             self.stats = await self.docker.all_stats(running)
             self.containers = containers
+            self.logs.sync(self.docker, containers, self._tty_of)
             if self.docker_info is None or not self.docker_ok:
                 self.docker_info = await self.docker.info()
             if self.docker_ok is False:
@@ -277,6 +284,9 @@ class Collector:
         if nice:
             self.add_event(nice)
         self._docker_refresh.set()  # refresh the container list now rather than in 6 s
+
+    async def _tty_of(self, cid: str) -> bool:
+        return bool((await self.docker.inspect(cid)).get("tty"))
 
     def _on_events_state(self, connected: bool) -> None:
         self.events_connected = connected
