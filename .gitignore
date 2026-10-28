@@ -8,8 +8,6 @@ data/
 .env
 .DS_Store
 
-# Agent and editor files stay out of the repo
-CLAUDE.md
-.claude/
+# Editor files
 .vscode/
 .idea/

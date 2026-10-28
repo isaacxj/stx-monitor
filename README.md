@@ -140,5 +140,5 @@ Settings, all from environment variables: `STX_HOST_ROOT`, `DOCKER_HOST` (or `no
 - Disk-full forecast from the growth rate.
 - SMART disk health.
 - Backup age.
-- "Ask Claude" diagnosis button for a failing container.
+- "Ask AI" diagnosis button for a failing container.
 - Deploy panel showing the running commit for each app.
