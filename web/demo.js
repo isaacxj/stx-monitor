@@ -261,6 +261,8 @@ const HISTORY = [
   { id: 1, started: T0 - 3 * 86400, actor: 'isaac', device: 'iPhone, Safari', action: 'autopilot', target: 'server', status: 'ok', detail: 'Power-outage autopilot on, shut down at 20%' },
 ];
 let autopilot = { enabled: true, threshold: 20 };
+// ?demo&signin starts on the sign-in page.
+let signedIn = !new URLSearchParams(location.search).has('signin');
 const updates = { c94d1f0a6b22: { available: true, checked: T0 - 3600 } };
 
 function controlView() {
@@ -303,7 +305,9 @@ export function createDemo() {
           reports: { unseen: REPORTS.filter((r) => !r.seen).length, recent: REPORTS.map(({ data, ...r }) => ({ ...r, cause: data.cause })) },
         };
       }
-      if (path.startsWith('api/session')) return { authenticated: true, user: 'isaac', csrf: 'demo', device: 'iPhone, Safari', has_password: true, passkeys: 1, locked_for: 0 };
+      if (path.startsWith('api/session')) {
+        return { authenticated: signedIn, user: 'isaac', csrf: 'demo', device: 'iPhone, Safari', has_password: true, passkeys: 1, locked_for: 0, hostname: 'stx-server' };
+      }
       if (path.startsWith('api/control')) return controlView();
       if (path.startsWith('api/auth/account')) {
         return { user: 'isaac', passkeys: [{ id: 'k1', name: 'iPhone', created: T0 - 5 * 86400, last_used: T0 - 600 }],
@@ -359,7 +363,9 @@ export function createDemo() {
         return { ...row };
       }
       if (path === 'api/autopilot') { autopilot = { enabled: body.enabled, threshold: body.threshold }; return autopilot; }
-      if (path === 'api/auth/logout') return { ok: true };
+      if (path === 'api/auth/logout') { signedIn = false; return { ok: true }; }
+      if (path === 'api/auth/login' || path === 'api/auth/passkey/finish') { signedIn = true; return { ok: true, csrf: 'demo' }; }
+      if (path === 'api/auth/passkey/begin') throw new Error('Passkeys are not simulated in demo mode. Use any password.');
       return { ok: true, started: true, signed_out: 1 };
     },
     followLogs(ui, add) {

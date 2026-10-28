@@ -499,7 +499,7 @@ views.storage = {
 // ================================================================ the shell
 let mounted = null;
 function render() {
-  const signedIn = DEMO || S.session.authenticated;
+  const signedIn = S.session.authenticated;
   document.body.classList.toggle('signed-out', !signedIn);
   const r = signedIn ? route() : { section: 'login', sub: '', params: new URLSearchParams() };
   const key = `${r.section}/${r.section === 'logs' ? r.sub.split('/')[0] : r.section === 'system' ? r.sub : ''}`;
@@ -580,7 +580,7 @@ async function loadSession() {
 }
 
 async function loadOverview() {
-  if (!DEMO && !S.session.authenticated) return;
+  if (!S.session.authenticated) return;
   try {
     applyOverview(await getJSON('api/overview'));
     render();
@@ -714,7 +714,7 @@ async function boot() {
   }
   await loadSession();
   render();
-  if (!DEMO && !S.session.authenticated) return;
+  if (!S.session.authenticated) return;
   await loadOverview();
   const r = route();
   if (r.section === 'apps' && r.sub) loadDetail(findApp(r.sub));

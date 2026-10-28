@@ -1,4 +1,4 @@
-# stx-monitor and its read-only Docker socket proxy.
+# stx-monitor, its read-only Docker proxy, and the narrow proxy for actions.
 # Deploy with scripts/deploy.sh, which sets GIT_SHA for the build.
 name: stx
 
@@ -11,23 +11,29 @@ services:
     image: stx-monitor:${GIT_SHA:-dev}
     container_name: stx-monitor
     restart: unless-stopped
-    # Share the host's network: ufw filters port 8090 like any other service,
-    # and /proc/net shows the real network cards instead of a container's.
+    # Share the host's network so /proc/net shows the real network cards.
+    # It listens on 127.0.0.1 only; `tailscale serve` publishes it to your
+    # tailnet over HTTPS, and nothing else can reach it.
     network_mode: host
     # Share the host's process list, so "busiest processes" shows everything.
     pid: host
     environment:
       STX_HOST_ROOT: /host
-      DOCKER_HOST: tcp://127.0.0.1:2375
-      STX_DATA_DIR: /data
+      STX_BIND: 127.0.0.1
       STX_PORT: "8090"
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      STX_DOCKER_CONTROL_HOST: tcp://127.0.0.1:2376
+      STX_DATA_DIR: /data
       STX_POWER_RATE: "0.15"
       STX_OWNER: Isaac
+      # Optional, e.g. https://stx-server.tail1234.ts.net. Picked up from Tailscale if empty.
+      STX_PUBLIC_URL: ${STX_PUBLIC_URL:-}
     volumes:
       # The whole host filesystem, read-only. rslave lets drives mounted later
-      # on the host show up inside the container too.
+      # on the host show up inside the container too. This is also how the
+      # host journal (/var/log/journal) and stx-helper's socket are reached.
       - /:/host:ro,rslave
-      # History survives restarts and rebuilds.
+      # SQLite database: events, failure reports, history, sessions, settings.
       - stx-data:/data
       # Edit config/apps.yaml in this repo and the map updates within seconds.
       - ./config:/config:ro
@@ -35,7 +41,9 @@ services:
       stx.app: stx-monitor
     depends_on:
       - docker-proxy
+      - docker-control
 
+  # Read-only: lists containers, stats, logs, events, image and disk info. GET only.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:v0.5.0
     container_name: stx-docker-proxy
@@ -44,16 +52,38 @@ services:
       CONTAINERS: "1"
       INFO: "1"
       EVENTS: "1"
+      IMAGES: "1"
+      DISTRIBUTION: "1"
+      SYSTEM: "1"
       POST: "0"
-      # Listen on IPv4 only; the port is published on 127.0.0.1 anyway.
       DISABLE_IPV6: "1"
     ports:
-      # Only reachable from the server itself.
       - "127.0.0.1:2375:2375"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
       stx.app: docker-proxy
+
+  # Actions: only start, stop and restart a container. Nothing else, not even listing.
+  docker-control:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: stx-docker-control
+    restart: unless-stopped
+    environment:
+      POST: "1"
+      ALLOW_START: "1"
+      ALLOW_STOP: "1"
+      ALLOW_RESTARTS: "1"
+      EVENTS: "0"
+      PING: "0"
+      VERSION: "0"
+      DISABLE_IPV6: "1"
+    ports:
+      - "127.0.0.1:2376:2375"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      stx.app: docker-control
 
 volumes:
   stx-data:

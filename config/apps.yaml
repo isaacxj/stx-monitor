@@ -24,15 +24,20 @@ apps:
     name: stx-monitor
     group: monitoring
     description: This console
-    port: 8090
     container: stx-monitor
-    links: [docker-proxy]
+    links: [docker-proxy, docker-control]
 
   - id: docker-proxy
     name: Socket proxy
     group: monitoring
     description: Read-only gate to the Docker API
     container: stx-docker-proxy
+
+  - id: docker-control
+    name: Control proxy
+    group: monitoring
+    description: Lets the console start, stop and restart apps
+    container: stx-docker-control
 
   - id: ntfy
     name: ntfy

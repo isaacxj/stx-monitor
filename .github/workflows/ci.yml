@@ -17,7 +17,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: pytest -q
       - name: Check the web UI parses
-        run: node --check web/app.js && node --check web/demo.js
+        run: for f in web/*.js; do node --check "$f"; done
 
   docker:
     runs-on: ubuntu-latest
@@ -28,13 +28,15 @@ jobs:
         run: docker build --build-arg GIT_SHA="${GITHUB_SHA::7}" -t stx-monitor:ci .
       - name: Smoke test
         run: |
-          docker run -d --name stx -p 8090:8090 -e DOCKER_HOST=none stx-monitor:ci
+          docker run -d --name stx -p 8090:8090 -e STX_BIND=0.0.0.0 -e DOCKER_HOST=none stx-monitor:ci
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:8090/api/health && break
             sleep 1
           done
-          curl -fsS http://127.0.0.1:8090/api/overview > /dev/null
+          curl -fsS http://127.0.0.1:8090/api/session | grep -q '"authenticated":false'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/api/overview)" = 401
           curl -fsS http://127.0.0.1:8090/ | grep -q "<title>stx-monitor</title>"
+          docker exec stx python -m monitor status
       - name: Container logs
         if: always()
         run: docker logs stx || true
