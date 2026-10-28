@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+data/
+*.egg-info/
+.env
+.DS_Store
+
+# Agent and editor files stay out of the repo
+CLAUDE.md
+.claude/
+.vscode/
+.idea/
