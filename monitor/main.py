@@ -23,6 +23,8 @@ from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("monitor")
+# httpx logs every request at INFO, which is one line per container every few seconds.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 STARTED = time.time()
 KEEPALIVE = 15.0
@@ -131,10 +133,10 @@ async def container_detail(request: Request, key: str) -> dict:
 
 
 @app.get("/api/containers/{key}/logs")
-async def container_logs(request: Request, key: str, tail: int = Query(200, ge=1, le=2000)) -> dict:
+async def container_logs(request: Request, key: str, tail: int = Query(200, ge=1)) -> dict:
     col, c = _resolve(request, key)
     try:
-        lines = await col.docker.logs(c["id"], tail=tail)
+        lines = await col.docker.logs(c["id"], tail=min(tail, 2000))
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"docker: {exc}") from exc
     return {"id": c["id"], "name": c["name"], "lines": lines}

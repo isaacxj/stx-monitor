@@ -1,0 +1,59 @@
+# stx-monitor and its read-only Docker socket proxy.
+# Deploy with scripts/deploy.sh, which sets GIT_SHA for the build.
+name: stx
+
+services:
+  stx-monitor:
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    image: stx-monitor:${GIT_SHA:-dev}
+    container_name: stx-monitor
+    restart: unless-stopped
+    # Share the host's network: ufw filters port 8090 like any other service,
+    # and /proc/net shows the real network cards instead of a container's.
+    network_mode: host
+    # Share the host's process list, so "busiest processes" shows everything.
+    pid: host
+    environment:
+      STX_HOST_ROOT: /host
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      STX_DATA_DIR: /data
+      STX_PORT: "8090"
+      STX_POWER_RATE: "0.15"
+      STX_OWNER: Isaac
+    volumes:
+      # The whole host filesystem, read-only. rslave lets drives mounted later
+      # on the host show up inside the container too.
+      - /:/host:ro,rslave
+      # History survives restarts and rebuilds.
+      - stx-data:/data
+      # Edit config/apps.yaml in this repo and the map updates within seconds.
+      - ./config:/config:ro
+    labels:
+      stx.app: stx-monitor
+    depends_on:
+      - docker-proxy
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: stx-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      INFO: "1"
+      EVENTS: "1"
+      POST: "0"
+      # Listen on IPv4 only; the port is published on 127.0.0.1 anyway.
+      DISABLE_IPV6: "1"
+    ports:
+      # Only reachable from the server itself.
+      - "127.0.0.1:2375:2375"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      stx.app: docker-proxy
+
+volumes:
+  stx-data:
