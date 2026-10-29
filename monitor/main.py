@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import re
 import time
 from contextlib import asynccontextmanager
@@ -498,6 +499,11 @@ async def logs_stream(request: Request, source: str = "all", level: str = "all",
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
+
+# The web app shell (index.html, scripts, styles, icons, manifest) is public on purpose:
+# the sign-in page needs it, and the home-screen icon is fetched without cookies.
+# Only /api/ carries data, and the guard above protects all of it.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 if settings.web_dir.is_dir():
     app.mount("/", StaticFiles(directory=settings.web_dir, html=True), name="web")

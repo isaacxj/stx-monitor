@@ -153,3 +153,24 @@ def test_overview_and_guards_when_signed_in(client):
     assert client.get("/api/logs?source=../../etc").status_code == 400
     assert client.get("/api/logs").json()["lines"] is not None
     assert client.get("/api/control").json()["capabilities"] == {"control": False, "helper": False}
+
+
+def test_app_shell_and_icons_are_public(client):
+    """The sign-in page and home-screen icon must load without a session."""
+    page = client.get("/")
+    assert page.status_code == 200
+    for tag in ('rel="manifest"', 'href="icons/apple-touch-icon.png"', 'apple-mobile-web-app-title',
+                'href="icons/favicon-32.png"', 'href="icons/icon-small.svg"'):
+        assert tag in page.text
+    manifest = client.get("/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.headers["content-type"].startswith("application/manifest+json")
+    data = manifest.json()
+    assert data["display"] == "standalone" and data["theme_color"] == "#040B16"
+    assert any(i["purpose"] == "maskable" for i in data["icons"])
+    for icon in data["icons"]:
+        r = client.get("/" + icon["src"])
+        assert r.status_code == 200 and r.headers["content-type"] == icon["type"], icon["src"]
+    for name in ("apple-touch-icon.png", "favicon-32.png", "favicon-16.png", "icon-small.svg"):
+        assert client.get(f"/icons/{name}").status_code == 200
+    assert client.get("/api/overview").status_code == 401  # data still needs sign-in
