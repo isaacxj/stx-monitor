@@ -693,7 +693,7 @@ class HostCollector:
         self._throttle_prev: dict | None = None
         self._throttle_events = 0
         self._passwd: dict[int, str] = {}
-        self._passwd_at = 0.0
+        self._passwd_at = float("-inf")  # monotonic time starts near 0 at boot, so 0.0 could skip the first load
         self._proc_prev: tuple[dict[int, dict], float] | None = None
         self.identity = safe(read_identity, root) or {}
         psutil.cpu_percent(percpu=True)  # prime the counters; the first call returns zeros
