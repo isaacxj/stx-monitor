@@ -146,7 +146,7 @@ function host() {
       { slot: '0000:00:02.0', vendor: 'Intel', name: 'UHD Graphics 630 (Mobile)', driver: 'i915', runtime_status: 'active', boot_vga: true, render_node: 'renderD128' },
       { slot: '0000:01:00.0', vendor: 'NVIDIA', name: 'GeForce GTX 1060 Mobile', driver: 'nouveau', runtime_status: 'suspended', boot_vga: false, render_node: 'renderD129' },
     ],
-    render_node: true,
+    quick_sync: 'renderD128',
     lid: 'closed',
     processes: { count: 214, by_cpu: procs, by_mem: [...procs].sort((a, b) => b.rss - a.rss) },
   };

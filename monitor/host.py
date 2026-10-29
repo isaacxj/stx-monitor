@@ -361,8 +361,9 @@ def read_disks(root: Path, mounts: list[dict]) -> list[dict]:
 def read_hwmon(root: Path) -> dict:
     """Temperatures and fan speeds from every hwmon (hardware monitor) driver.
 
-    On this laptop that is coretemp (CPU), dell_smm (fans and board sensors),
-    plus whatever the SSDs, Wi-Fi and ACPI expose.
+    On this laptop that is coretemp (CPU), the chipset (pch_cannonlake) and
+    ACPI. Fans only appear once the dell-smm-hwmon driver is loaded, which the
+    G7 doesn't do by itself (see the README).
     """
     temps = []
     fans = []
@@ -430,7 +431,8 @@ def read_power_supply(root: Path) -> dict | None:
                 "capacity": read_int(ps / "capacity"),
                 "status": read_text(ps / "status"),
                 "health": round(full / design * 100, 1) if full and design else None,
-                "cycle_count": read_int(ps / "cycle_count"),
+                # Dell firmware reports 0 when it doesn't count cycles at all.
+                "cycle_count": read_int(ps / "cycle_count") or None,
                 "power_w": round(power_uw / 1_000_000, 2) if power_uw is not None else None,
                 "threshold_start": start,
                 "threshold_end": end,
@@ -575,9 +577,17 @@ def read_gpus(root: Path) -> list[dict]:
     return out
 
 
-def render_node_ready(root: Path) -> bool:
-    """/dev/dri/renderD128 is what Jellyfin uses for Quick Sync hardware transcoding."""
-    return (root / "dev/dri/renderD128").exists()
+def quick_sync_node(root: Path, gpus: list[dict]) -> str | None:
+    """The Intel GPU's render node, which Jellyfin needs for Quick Sync transcoding.
+
+    The number is not fixed. On this laptop nouveau registers the GTX 1060
+    first, so it gets renderD128 and the Intel GPU gets renderD129.
+    """
+    for g in gpus:
+        node = g.get("render_node")
+        if g.get("vendor") == "Intel" and node and (root / "dev/dri" / node).exists():
+            return node
+    return None
 
 
 # -------------------------------------------------------------------------- lid
@@ -601,6 +611,59 @@ def read_passwd(root: Path) -> dict[int, str]:
     return out
 
 
+PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
+
+
+def read_thread_runtimes(pid_dir: Path) -> dict[int, int]:
+    """Nanoseconds each thread of a process has spent on a CPU (task/*/schedstat)."""
+    out = {}
+    try:
+        tids = os.listdir(pid_dir / "task")
+    except OSError:
+        return out
+    for tid in tids:
+        text = read_text(pid_dir / "task" / tid / "schedstat")
+        if text and tid.isdigit():
+            try:
+                out[int(tid)] = int(text.split()[0])
+            except (ValueError, IndexError):
+                continue
+    return out
+
+
+def read_process(proc: Path, pid: int) -> dict | None:
+    """One process from /proc/<pid>, without opening /proc/<pid>/stat.
+
+    Reading another process's stat file runs a ptrace access check. Docker's
+    AppArmor profile denies it for host processes and the kernel logs each
+    denial to the journal, which buried every other line on the Logs page.
+    comm, status, statm and schedstat hold what we need and are not checked.
+    """
+    d = proc / str(pid)
+    name = read_text(d / "comm")
+    status = read_text(d / "status")
+    statm = read_text(d / "statm")
+    if name is None or status is None or statm is None:
+        return None
+    if len(name) >= 15:  # comm is cut to 15 characters; the command line has the full name
+        full = os.path.basename((read_text(d / "cmdline") or "").split("\0", 1)[0])
+        if full.startswith(name):
+            name = full
+    uid = None
+    for line in status.splitlines():
+        if line.startswith("Uid:"):
+            uid = int(line.split()[1])
+            break
+    pages = statm.split()
+    return {
+        "pid": pid,
+        "name": name,
+        "uid": uid,
+        "rss": int(pages[1]) * PAGE_SIZE if len(pages) > 1 else 0,
+        "threads": read_thread_runtimes(d),
+    }
+
+
 _CONTAINER_RE = re.compile(r"(?:docker[-/]|containerd[-/]|/)([0-9a-f]{64})")
 
 
@@ -618,9 +681,12 @@ def container_of(pid: int) -> str | None:
 class HostCollector:
     """Holds the previous sample of every counter so it can report rates."""
 
-    def __init__(self, root: Path, power_rate: float = 0.15):
+    def __init__(self, root: Path, power_rate: float = 0.15, proc: Path = Path("/proc")):
         self.root = root
         self.power_rate = power_rate
+        # The container shares the host's process list (pid: host), so its own
+        # /proc lists every host process.
+        self.proc = proc
         self.rapl = RaplMeter(root)
         self._net_prev: tuple[dict[str, tuple[int, int]], float] | None = None
         self._io_prev: tuple[dict[str, tuple[int, int]], float] | None = None
@@ -628,7 +694,7 @@ class HostCollector:
         self._throttle_events = 0
         self._passwd: dict[int, str] = {}
         self._passwd_at = 0.0
-        self._procs: dict[int, psutil.Process] = {}
+        self._proc_prev: tuple[dict[int, dict], float] | None = None
         self.identity = safe(read_identity, root) or {}
         psutil.cpu_percent(percpu=True)  # prime the counters; the first call returns zeros
 
@@ -640,6 +706,7 @@ class HostCollector:
         supply = safe(read_power_supply, self.root)
         hw = safe(read_hwmon, self.root) or {"cpu_temp": None, "temps": [], "fans": []}
         cpu_w = safe(self.rapl.read, mono)
+        gpus = safe(read_gpus, self.root) or []
         return {
             "time": now,
             "uptime_s": safe(read_uptime, self.root),
@@ -654,10 +721,10 @@ class HostCollector:
             "fans": hw["fans"],
             "power_supply": supply,
             "power": summarize_power(cpu_w, supply, self.power_rate),
-            "gpus": safe(read_gpus, self.root) or [],
-            "render_node": safe(render_node_ready, self.root),
+            "gpus": gpus,
+            "quick_sync": safe(quick_sync_node, self.root, gpus),
             "lid": safe(read_lid, self.root),
-            "processes": safe(self._processes),
+            "processes": safe(self._processes, mono),
         }
 
     def _cpu(self) -> dict:
@@ -761,47 +828,42 @@ class HostCollector:
             self._passwd_at = time.monotonic()
         return self._passwd.get(uid, str(uid))
 
-    def _processes(self) -> dict:
+    def _processes(self, mono: float) -> dict:
+        pids = [int(p) for p in os.listdir(self.proc) if p.isdigit()]
+        prev = self._proc_prev
+        seen: dict[int, dict] = {}
         rows = []
-        live = set()
-        for pid in psutil.pids():
-            live.add(pid)
-            proc = self._procs.get(pid)
-            try:
-                if proc is None:
-                    proc = psutil.Process(pid)
-                    self._procs[pid] = proc
-                    proc.cpu_percent(None)  # first reading is always 0; it starts the clock
-                    continue
-                with proc.oneshot():
-                    rows.append({
-                        "pid": pid,
-                        "name": proc.name(),
-                        "cpu": proc.cpu_percent(None),
-                        "rss": proc.memory_info().rss,
-                        "uid": proc.uids().real,
-                    })
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                self._procs.pop(pid, None)
-        for gone in set(self._procs) - live:
-            self._procs.pop(gone, None)
+        for pid in pids:
+            p = read_process(self.proc, pid)
+            if p is None:
+                continue  # it exited while we looked
+            seen[pid] = p
+            before = prev[0].get(pid) if prev else None
+            if before is None or before["name"] != p["name"]:
+                continue  # new process (or a reused pid): the next sample has its CPU use
+            # A thread that started since the last sample did all its work in between.
+            ns = sum(max(0, t - before["threads"].get(tid, 0)) for tid, t in p["threads"].items())
+            rows.append({**p, "cpu_ns": ns})
+        self._proc_prev = (seen, mono)
 
         threads = psutil.cpu_count() or 1
+        dt = mono - prev[1] if prev else 0.0
 
         def finish(r: dict) -> dict:
             return {
                 "pid": r["pid"],
                 "name": r["name"],
                 "user": self._user(r["uid"]),
-                "cpu": round(r["cpu"] / threads, 1),  # % of the whole machine, like the CPU gauge
+                # % of the whole machine, like the CPU gauge
+                "cpu": round(r["cpu_ns"] / (dt * 1e9 * threads) * 100, 1) if dt > 0 else 0.0,
                 "rss": r["rss"],
                 "container": container_of(r["pid"]),
             }
 
-        by_cpu = sorted(rows, key=lambda r: r["cpu"], reverse=True)[:8]
+        by_cpu = sorted(rows, key=lambda r: r["cpu_ns"], reverse=True)[:8]
         by_mem = sorted(rows, key=lambda r: r["rss"], reverse=True)[:8]
         return {
-            "count": len(live),
+            "count": len(pids),
             "by_cpu": [finish(r) for r in by_cpu],
             "by_mem": [finish(r) for r in by_mem],
         }

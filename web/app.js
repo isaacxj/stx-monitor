@@ -366,6 +366,7 @@ function laptopTab() {
     const ac = ps.ac_online;
     let note;
     if (!ac) note = `Wall power may be out.${isNum(b?.power_w) ? ` Drawing ${b.power_w.toFixed(1)} W.` : ''}`;
+    else if (b?.threshold_end && b.capacity > b.threshold_end) note = `Above the ${b.threshold_end}% charge limit, so it isn't charging.${b.threshold_start ? ` It starts again below ${b.threshold_start}%.` : ''}`;
     else if (b?.threshold_end) note = `Charging stops at ${b.threshold_end}% to protect the battery.`;
     else if (b && /not charging|full/i.test(b.status || '')) note = `Holding at ${b.capacity}%: the charge limit set in the BIOS is doing its job.`;
     else if (b?.status === 'Charging') note = 'Charging.';
@@ -377,7 +378,10 @@ function laptopTab() {
   }
   const facts = [];
   if (b) {
-    facts.push(['Battery health', `${isNum(b.health) ? b.health.toFixed(0) + '% of its original capacity' : '–'}${isNum(b.cycle_count) ? `, ${b.cycle_count} cycles` : ''}`]);
+    const health = `${isNum(b.health) ? b.health.toFixed(0) + '% of its original capacity' : '–'}${isNum(b.cycle_count) ? `, ${b.cycle_count} cycles` : ''}`;
+    facts.push(['Battery health', isNum(b.health) && b.health < 60
+      ? `<span class="amber-text">${health}. It's worn, so in a power cut autopilot has much less time than on a new battery. Consider replacing it.</span>`
+      : health]);
     if (b.threshold_start && b.threshold_end) facts.push(['Charge window', `${b.threshold_start}–${b.threshold_end}%`]);
   }
   facts.push(['Lid', h.lid ? h.lid[0].toUpperCase() + h.lid.slice(1) : 'Not reported']);
@@ -391,7 +395,11 @@ function laptopTab() {
     facts.push([esc(label), esc(state)]);
   }
   if ((h.gpus || []).length === 0) facts.push(['Graphics', 'No GPU found on the PCI bus']);
-  facts.push(['Transcoding', h.render_node ? '<code>/dev/dri/renderD128</code> is present' : 'No <code>/dev/dri/renderD128</code> yet']);
+  const qs = h.quick_sync;
+  facts.push(['Transcoding', !qs ? 'No Intel render node in <code>/dev/dri</code> yet'
+    : qs === 'renderD128' ? 'Quick Sync on <code>/dev/dri/renderD128</code>'
+    : `Quick Sync on <code>/dev/dri/${esc(qs)}</code>. renderD128 is the other GPU, so set Jellyfin's QSV device to this one.`]);
+  if (!(h.fans || []).length) facts.push(['Fans', "Not reported: the dell-smm-hwmon driver isn't loaded (see the README)"]);
   const thr = h.cpu?.throttle;
   facts.push(['Throttling', !thr ? 'Not reported' : h.cpu.throttling ? 'Happening now' : thr.core + thr.package === 0 ? 'None since boot' : `${(thr.core + thr.package).toLocaleString()} times since boot`]);
 

@@ -176,6 +176,12 @@ def test_power_supply_on_battery(tmp_path):
     assert power["monthly_cost"] == round(18.5 * 730 / 1000 * 0.15, 2)
 
 
+def test_battery_without_cycle_count_reports_none(tmp_path):
+    _battery(tmp_path, status="Full", ac="1")
+    write(tmp_path, "sys/class/power_supply/BAT0/cycle_count", "0")  # Dell: not counted
+    assert host.read_power_supply(tmp_path)["battery"]["cycle_count"] is None
+
+
 def test_power_on_wall_uses_rapl(tmp_path):
     _battery(tmp_path, status="Not charging", ac="1")
     power = host.summarize_power(9.0, host.read_power_supply(tmp_path), 0.15)
@@ -261,8 +267,55 @@ def test_gpus_and_lid(tmp_path):
     assert gpus["Intel"]["name"] == "UHD Graphics 630 (Mobile)"
     assert gpus["NVIDIA"]["runtime_status"] == "suspended"
     assert gpus["NVIDIA"]["driver"] is None
-    assert host.render_node_ready(tmp_path) is True
+    assert host.quick_sync_node(tmp_path, list(gpus.values())) == "renderD128"
     assert host.read_lid(tmp_path) == "closed"
+
+
+def test_quick_sync_is_the_intel_node_even_when_nvidia_has_renderd128(tmp_path):
+    # As on stx-server: nouveau registers first, so the GTX 1060 gets renderD128.
+    write(tmp_path, "dev/dri/renderD128")
+    write(tmp_path, "dev/dri/renderD129")
+    gpus = [
+        {"vendor": "NVIDIA", "render_node": "renderD128"},
+        {"vendor": "Intel", "render_node": "renderD129"},
+    ]
+    assert host.quick_sync_node(tmp_path, gpus) == "renderD129"
+    assert host.quick_sync_node(tmp_path, gpus[:1]) is None
+
+
+def _proc(proc, pid, comm, uid, rss_pages, threads, cmdline=""):
+    d = f"{pid}"
+    write(proc, f"{d}/comm", comm + "\n")
+    write(proc, f"{d}/status", f"Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+    write(proc, f"{d}/statm", f"1000 {rss_pages} 50 1 0 100 0\n")
+    write(proc, f"{d}/cmdline", cmdline)
+    for tid, ns in threads.items():
+        write(proc, f"{d}/task/{tid}/schedstat", f"{ns} 0 0\n")
+
+
+def test_processes_from_schedstat_without_stat(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    write(tmp_path, "etc/passwd", "root:x:0:0::/root:/bin/bash\nisaac:x:1000:1000::/home/isaac:/bin/bash\n")
+    _proc(proc, 10, "jellyfin", 1000, 25600, {10: 1_000_000_000, 11: 0})
+    _proc(proc, 20, "containerd-shim", 0, 256, {20: 0}, cmdline="/usr/bin/containerd-shim-runc-v2\0-id\0abc\0")
+    monkeypatch.setattr(host.psutil, "cpu_count", lambda logical=True: 4)
+    c = host.HostCollector(tmp_path, proc=proc)
+    first = c._processes(100.0)
+    assert first["count"] == 2 and first["by_cpu"] == []  # the first look only starts the clock
+
+    # In 2 s: jellyfin's main thread used 1 s of CPU, thread 11 another 1 s, and a
+    # new thread 12 started and used 2 s. 4 s over 2 s on 4 threads = 50%.
+    _proc(proc, 10, "jellyfin", 1000, 25600, {10: 2_000_000_000, 11: 1_000_000_000, 12: 2_000_000_000})
+    _proc(proc, 30, "brand-new", 0, 1, {30: 5_000_000_000})
+    second = c._processes(102.0)
+    assert second["count"] == 3
+    top = second["by_cpu"][0]
+    assert (top["name"], top["user"], top["cpu"]) == ("jellyfin", "isaac", 50.0)
+    assert top["rss"] == 25600 * host.PAGE_SIZE
+    names = {r["name"] for r in second["by_mem"]}
+    assert "containerd-shim-runc-v2" in names  # comm is cut at 15 characters
+    assert "brand-new" not in names  # appears from its second sample on
+    assert not list(proc.glob("*/stat"))
 
 
 def test_throttle_counts_once_per_core(tmp_path):

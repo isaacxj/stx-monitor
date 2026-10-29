@@ -81,6 +81,34 @@ reinstalling.
 For autopilot to bring the server back after an outage, set the BIOS to power on when AC
 returns (on Dell laptops this is usually *Power Management → AC Behavior → Wake on AC*).
 
+### Fan speeds
+
+Fans come from the `dell-smm-hwmon` driver, which only loads by itself on the Dell models
+it lists, and the G7 7588 isn't one of them. Try it once:
+
+```bash
+sudo modprobe dell-smm-hwmon ignore_dmi=1
+```
+
+If `sensors` (or **System → Laptop**) now shows the fans, load it on every boot:
+
+```bash
+echo 'options dell-smm-hwmon ignore_dmi=1' | sudo tee /etc/modprobe.d/dell-smm-hwmon.conf
+```
+
+```bash
+echo dell-smm-hwmon | sudo tee /etc/modules-load.d/dell-smm-hwmon.conf
+```
+
+If `modprobe` fails, the firmware doesn't answer the driver and the console keeps showing
+"No fan sensor".
+
+### Quick Sync in Jellyfin
+
+The render node numbers aren't fixed. On stx-server, nouveau registers the GTX 1060 first, so
+it gets `/dev/dri/renderD128` and the Intel GPU gets `renderD129`. Give the Jellyfin container
+all of `/dev/dri`, and set its QSV device to the node **System → Laptop → Transcoding** names.
+
 ## Server commands
 
 ```bash
