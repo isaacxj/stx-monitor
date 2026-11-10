@@ -155,6 +155,19 @@ def test_overview_and_guards_when_signed_in(client):
     assert client.get("/api/control").json()["capabilities"] == {"control": False, "helper": False}
 
 
+def test_alert_settings_need_csrf_and_report_when_off(client):
+    csrf = login(client).json()["csrf"]
+    h = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
+    assert client.get("/api/control").json()["alerts"]["configured"] is False
+    assert client.post("/api/alerts", json={"categories": {"heat": False}}, headers={"Origin": ORIGIN}).status_code == 403
+    r = client.post("/api/alerts", json={"categories": {"heat": False}}, headers=h)
+    assert r.status_code == 200 and r.json()["categories"]["heat"] is False
+    assert client.post("/api/alerts", json={"categories": {"nope": True}}, headers=h).status_code == 400
+    r = client.post("/api/alerts/test", headers=h)
+    assert r.status_code == 502 and "STX_NTFY_URL" in r.json()["detail"]
+    client.post("/api/alerts", json={"categories": {"heat": True}}, headers=h)
+
+
 def test_app_shell_and_icons_are_public(client):
     """The sign-in page and home-screen icon must load without a session."""
     page = client.get("/")

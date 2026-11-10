@@ -1,4 +1,4 @@
-// Control center: app actions, server actions, autopilot, history and account.
+// Control center: app actions, server actions, autopilot, phone alerts, history and account.
 // Every action asks for confirmation first, then runs on the server; progress
 // arrives as "action" messages on the live stream.
 
@@ -148,6 +148,7 @@ function sentence(h) {
     case 'reboot': return 'rebooted the server';
     case 'shutdown': return 'shut the server down';
     case 'autopilot': return (h.detail || 'changed autopilot').replace(/^Power-outage autopilot/, 'turned power-outage autopilot');
+    case 'alerts': return 'changed which phone alerts are sent';
     default: return `${h.action} ${name}`.trim();
   }
 }
@@ -223,6 +224,33 @@ function serverPanel(ctl) {
     </div>`);
 }
 
+const ALERT_NAMES = { apps: 'App failures', power: 'Power', heat: 'Heat', storage: 'Disk space', security: 'Sign-ins', system: 'Docker' };
+
+function alertsPanel(ctl) {
+  const al = ctl.alerts;
+  if (!al) return '';
+  if (!al.configured) {
+    return panel(`
+      <h2>Phone alerts</h2>
+      <span class="muted" style="font-size:14px">Off. Get a push on your phone when an app crashes, the power goes out, it runs hot, a disk fills up or someone signs in.</span>
+      <span class="muted" style="font-size:13px">On the server, put a topic URL in <code>~/stx-monitor/.env</code>, then run <code>scripts/deploy.sh</code>:</span>
+      <code style="font-size:13px;overflow-wrap:anywhere">STX_NTFY_URL=https://ntfy.sh/stx-&lt;long random name&gt;</code>
+      <span class="muted" style="font-size:13px">Subscribe to the same topic in the ntfy app on your iPhone.</span>`);
+  }
+  const rows = Object.keys(ALERT_NAMES).map((k) => `<div class="setting">
+      <span class="setting-text"><b>${esc(ALERT_NAMES[k])}</b><span class="muted">${esc(al.descriptions[k] || '')}</span></span>
+      <button type="button" role="switch" class="switch" aria-checked="${!!al.categories[k]}" aria-label="${esc(ALERT_NAMES[k])} alerts" data-action="alert-toggle" data-cat="${k}"><span></span></button>
+    </div>`).join('');
+  const last = al.last_error && (!al.last_sent || al.last_error.time > al.last_sent.time)
+    ? `<span class="red-text" style="font-size:13px">Last alert failed ${esc(ago(al.last_error.time))}: ${esc(al.last_error.detail)}</span>`
+    : al.last_sent ? `<span class="muted" style="font-size:13px">Last sent ${esc(ago(al.last_sent.time))}: ${esc(al.last_sent.title)}</span>` : '';
+  return panel(`
+    <div class="row-head"><h2>Phone alerts</h2><button type="button" class="btn sm quiet" data-action="alert-test">Send a test</button></div>
+    <span class="muted" style="font-size:13px">Through ntfy on ${esc(al.server)}, topic ${esc(al.topic_hint)}. A repeat of the same alert waits 10 minutes.</span>
+    ${rows}
+    ${last}`);
+}
+
 function accountPanel() {
   const a = S.account;
   if (!a) return '';
@@ -267,7 +295,7 @@ views.control = {
           <div class="table-box"><table class="ctl-table"><thead><tr><th scope="col">App</th><th scope="col">State</th><th scope="col" class="r">Actions</th></tr></thead><tbody id="r-ctl-rows"></tbody></table></div>
         </section>
         <div class="control-side">
-          <div id="r-ctl-server"></div>
+          <div id="r-ctl-server" class="control-stack"></div>
           <section aria-labelledby="ctl-hist" class="history"><h2 id="ctl-hist">History</h2><ol class="plain-list hist" id="r-ctl-history"></ol></section>
         </div>
       </div>
@@ -286,7 +314,7 @@ views.control = {
     region('r-ctl-notes', notes.map((n) => `<div class="banner">${n}</div>`).join(''));
     const rows = [...ctl.containers].sort((a, b) => (a.state === 'running') - (b.state === 'running') || a.display.localeCompare(b.display));
     region('r-ctl-rows', rows.map(appRow).join('') || '<tr><td colspan="3" class="empty">No containers.</td></tr>');
-    region('r-ctl-server', serverPanel(ctl));
+    region('r-ctl-server', serverPanel(ctl) + alertsPanel(ctl));
     region('r-ctl-history', ctl.history.slice(0, 12).map(historyRow).join('') || '<li class="empty">Nothing yet.</li>');
     region('r-ctl-account', accountPanel());
   },
@@ -308,6 +336,18 @@ document.addEventListener('click', async (e) => {
       S.control.autopilot = await postJSON('api/autopilot', { enabled: turnOn, threshold: ap.threshold });
       toast(`Autopilot ${turnOn ? 'on' : 'off'}`, 'ok');
     } catch (err) { toast(err.message, 'error'); }
+    loadControl();
+  } else if (action === 'alert-toggle' && S.control?.alerts) {
+    const cat = el.dataset.cat;
+    const on = !S.control.alerts.categories[cat];
+    try {
+      S.control.alerts = await postJSON('api/alerts', { categories: { [cat]: on } });
+      toast(`${ALERT_NAMES[cat]} alerts ${on ? 'on' : 'off'}`, 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+    loadControl();
+  } else if (action === 'alert-test') {
+    toast('Sending a test alert…', 'busy');
+    try { S.control.alerts = await postJSON('api/alerts/test'); toast('Test alert sent. Check your phone.', 'ok'); } catch (err) { toast(err.message, 'error'); }
     loadControl();
   } else if (action === 'check-updates') {
     try { await postJSON('api/updates/check'); toast('Checking each image for updates. This takes a minute.', 'busy'); } catch (err) { toast(err.message, 'error'); }

@@ -28,6 +28,9 @@ the UI with made-up data.*
   suggested fix. **Events** is the timeline of starts, stops, power, heat and sign-ins.
 - **Control**: start, stop, restart and update apps; clean up images; restart Docker;
   reboot (type the hostname to confirm). Every action asks first and lands in History.
+- **Phone alerts**: a push through ntfy when an app crashes, the power goes out or comes
+  back, the CPU runs hot, a drive passes 90%, or someone signs in. Each type can be turned
+  off in Control, and a crash loop buzzes once per 10 minutes, not every few seconds.
 - **Power-outage autopilot**: on battery at 20% (adjustable), it stops the apps and shuts
   the server down cleanly instead of letting the battery die mid-write.
 - **System** and **Storage**: per-thread load, processes, battery, lid, GPUs, sensors,
@@ -74,6 +77,25 @@ remove them:
 ```bash
 sudo ufw delete allow in on tailscale0 to any port 8090 proto tcp
 ```
+
+5. Turn on phone alerts (optional). Make up a long random topic name, then put it in
+   `~/stx-monitor/.env`:
+
+   ```bash
+   echo "STX_NTFY_URL=https://ntfy.sh/stx-$(openssl rand -hex 12)" >> ~/stx-monitor/.env
+   ```
+
+   ```bash
+   ~/stx-monitor/scripts/deploy.sh && grep NTFY ~/stx-monitor/.env
+   ```
+
+   Install the ntfy app on the iPhone, tap **+**, and subscribe to the same topic name
+   (everything after `ntfy.sh/`). Then press **Control → Phone alerts → Send a test**.
+
+   Anyone who knows the topic name can read the alerts, which is why it's random. The
+   alert text is short (an app name, a temperature, a device that signed in) and never
+   includes logs. To keep them entirely on the server, self-host ntfy later and point
+   `STX_NTFY_URL` at it, with `STX_NTFY_TOKEN` if it needs an access token.
 
 To update later, run `scripts/deploy.sh` again. It tells you when the helper needs
 reinstalling.
@@ -178,11 +200,11 @@ Open `http://localhost:8090` (run `python -m monitor set-password` first), or
 Settings come from environment variables: `STX_HOST_ROOT`, `DOCKER_HOST` (or `none`),
 `STX_DOCKER_CONTROL_HOST`, `STX_APPS_FILE`, `STX_DATA_DIR`, `STX_BIND` (127.0.0.1),
 `STX_PORT` (8090), `STX_POWER_RATE` (0.15 $/kWh), `STX_OWNER`, `STX_PUBLIC_URL`,
+`STX_NTFY_URL`, `STX_NTFY_TOKEN`,
 `STX_GIT_SHA`, and for development only `STX_AUTH=off` and `STX_INSECURE_COOKIE=1`.
 
 ## Roadmap
 
-- ntfy push alerts to my iPhone for failures, power loss and sign-ins.
 - Jellyfin now playing, with a hardware vs software transcode badge.
 - Sonarr/Radarr download queue and a hardlink check.
 - Disk-full forecast from the growth rate.

@@ -394,6 +394,10 @@ class AutopilotBody(BaseModel):
     threshold: int = 20
 
 
+class AlertsBody(BaseModel):
+    categories: dict[str, bool]
+
+
 @app.get("/api/control")
 async def control(request: Request) -> dict:
     return await collector(request).actions.control_view()
@@ -413,6 +417,23 @@ async def run_action(request: Request, body: ActionBody) -> dict:
 async def set_autopilot(request: Request, body: AutopilotBody) -> dict:
     user, device = actor(request)
     return collector(request).actions.set_autopilot(body.enabled, body.threshold, user, device)
+
+
+@app.post("/api/alerts")
+async def set_alerts(request: Request, body: AlertsBody) -> dict:
+    user, device = actor(request)
+    try:
+        return collector(request).alerts.set_categories(body.categories, user, device)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/alerts/test")
+async def test_alert(request: Request) -> dict:
+    try:
+        return await collector(request).alerts.send_test()
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @app.post("/api/updates/check", status_code=202)

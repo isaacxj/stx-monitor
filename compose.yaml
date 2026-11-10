@@ -28,6 +28,9 @@ services:
       STX_OWNER: Isaac
       # Optional, e.g. https://stx-server.tail1234.ts.net. Picked up from Tailscale if empty.
       STX_PUBLIC_URL: ${STX_PUBLIC_URL:-}
+      # Phone alerts through ntfy. Set these in .env next to this file (it's gitignored).
+      STX_NTFY_URL: ${STX_NTFY_URL:-}
+      STX_NTFY_TOKEN: ${STX_NTFY_TOKEN:-}
     volumes:
       # The whole host filesystem, read-only. rslave lets drives mounted later
       # on the host show up inside the container too. This is also how the

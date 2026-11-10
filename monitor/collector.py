@@ -17,6 +17,7 @@ from typing import Any
 from . import __version__
 from . import tailscale
 from .actions import UPDATE_CHECK_EVERY, Actions
+from .alerts import Alerts
 from .apps import AppsFile, build_map
 from .config import Settings
 from .docker_client import DockerClient
@@ -161,6 +162,7 @@ class Collector:
         self.logs = LogHub()
         self.reports = FailureReports(self)
         self.actions = Actions(self, settings.docker_control_host)
+        self.alerts = Alerts(self, settings.ntfy_url, settings.ntfy_token)
         self._readings_at = 0.0
         self.boot_id: str | None = None
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
@@ -213,6 +215,7 @@ class Collector:
                 await t
         await self.logs.stop()
         await self.actions.close()
+        await self.alerts.close()
         await self._persist()
         if self.docker:
             await self.docker.close()
@@ -404,6 +407,7 @@ class Collector:
         ev = self.store.add_event(ev)
         self.events.append(ev)
         self.broadcast("event", ev)
+        self.alerts.notify(ev)
         return ev
 
     def subscribe(self) -> asyncio.Queue:

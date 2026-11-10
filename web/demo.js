@@ -261,6 +261,19 @@ const HISTORY = [
   { id: 1, started: T0 - 3 * 86400, actor: 'isaac', device: 'iPhone, Safari', action: 'autopilot', target: 'server', status: 'ok', detail: 'Power-outage autopilot on, shut down at 20%' },
 ];
 let autopilot = { enabled: true, threshold: 20 };
+const alerts = {
+  configured: true, server: 'ntfy.sh', topic_hint: 'stx…9q',
+  categories: { apps: true, power: true, heat: true, storage: true, security: true, system: false },
+  descriptions: {
+    apps: 'An app crashes, runs out of memory or fails its health check',
+    power: 'Wall power is lost or back, and autopilot shutdowns',
+    heat: 'The CPU runs hot',
+    storage: 'A drive is over 90% full',
+    security: 'Sign-ins, failed sign-ins and passkey changes',
+    system: "Docker can't be reached",
+  },
+  last_sent: { time: T0 - 26 * 60 - 5, title: 'sonarr stopped' }, last_error: null,
+};
 // ?demo&signin starts on the sign-in page.
 let signedIn = !new URLSearchParams(location.search).has('signin');
 const updates = { c94d1f0a6b22: { available: true, checked: T0 - 3600 } };
@@ -274,7 +287,7 @@ function controlView() {
       const actions = c.state === 'running' ? (prot.has(c.name) ? ['restart'] : ['restart', 'stop', 'update']) : ['start'];
       return { id: c.id, name: c.name, app: app?.id, display: app?.name || c.name, state: c.state, status: c.status, health: null, protected: prot.has(c.name), actions, update: updates[c.id] || null };
     }),
-    autopilot, prune_bytes: 3.2 * GiB, history: HISTORY, hostname: 'stx-server',
+    autopilot, alerts, prune_bytes: 3.2 * GiB, history: HISTORY, hostname: 'stx-server',
   };
 }
 
@@ -363,6 +376,8 @@ export function createDemo() {
         return { ...row };
       }
       if (path === 'api/autopilot') { autopilot = { enabled: body.enabled, threshold: body.threshold }; return autopilot; }
+      if (path === 'api/alerts') { Object.assign(alerts.categories, body.categories); return alerts; }
+      if (path === 'api/alerts/test') { alerts.last_sent = { time: now(), title: 'Test alert from stx-monitor' }; return alerts; }
       if (path === 'api/auth/logout') { signedIn = false; return { ok: true }; }
       if (path === 'api/auth/login' || path === 'api/auth/passkey/finish') { signedIn = true; return { ok: true, csrf: 'demo' }; }
       if (path === 'api/auth/passkey/begin') throw new Error('Passkeys are not simulated in demo mode. Use any password.');

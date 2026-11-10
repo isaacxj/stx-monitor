@@ -365,6 +365,7 @@ class Actions:
             "capabilities": self.capabilities(),
             "containers": containers,
             "autopilot": self.autopilot(),
+            "alerts": self.c.alerts.view(),
             "prune_bytes": prune,
             "history": self.store.list_actions(40),
             "hostname": self.c.host.identity.get("hostname"),

@@ -54,6 +54,10 @@ class Settings:
     # The HTTPS address you open the console at, e.g. https://stx-server.tail1234.ts.net.
     # Optional: the Tailscale name is picked up automatically.
     public_url: str
+    # Phone alerts: an ntfy topic URL such as https://ntfy.sh/stx-<random>, plus an
+    # access token if the ntfy server needs one. Empty turns alerts off.
+    ntfy_url: str
+    ntfy_token: str
     # Development only: turn sign-in off, or allow the session cookie over plain HTTP.
     auth_disabled: bool
     insecure_cookie: bool
@@ -77,6 +81,8 @@ def load() -> Settings:
         web_dir=Path(os.environ.get("STX_WEB_DIR", REPO_DIR / "web")),
         owner=os.environ.get("STX_OWNER", ""),
         public_url=os.environ.get("STX_PUBLIC_URL", "").rstrip("/"),
+        ntfy_url=os.environ.get("STX_NTFY_URL", "").strip(),
+        ntfy_token=os.environ.get("STX_NTFY_TOKEN", "").strip(),
         auth_disabled=os.environ.get("STX_AUTH", "on").lower() in ("off", "0", "false", "no"),
         insecure_cookie=os.environ.get("STX_INSECURE_COOKIE", "").lower() in ("1", "true", "yes"),
     )
