@@ -26,12 +26,13 @@ const PLAN = [
   ['caddy', 'Caddy', 'infrastructure', 'HTTPS and subdomains for every app', 443, []],
   ['backups', 'Backups', 'infrastructure', 'Nightly restic backups of app configs', null, []],
   ['jellyfin', 'Jellyfin', 'media', 'Streams movies and shows, Quick Sync transcoding', 8096, []],
-  ['jellyseerr', 'Jellyseerr', 'media', 'Request movies and shows', 5055, ['sonarr', 'radarr', 'jellyfin']],
+  ['seerr', 'Seerr', 'media', 'Request movies and shows', 5055, ['sonarr', 'radarr', 'jellyfin']],
   ['sonarr', 'Sonarr', 'media', 'Finds and organizes TV shows', 8989, ['prowlarr', 'qbittorrent']],
   ['radarr', 'Radarr', 'media', 'Finds and organizes movies', 7878, ['prowlarr', 'qbittorrent']],
   ['prowlarr', 'Prowlarr', 'media', 'Manages indexers for Sonarr and Radarr', 9696, []],
-  ['qbittorrent', 'qBittorrent', 'media', 'Downloads, only through the VPN', 8080, ['gluetun']],
+  ['qbittorrent', 'qBittorrent', 'media', 'Downloads, only through the VPN', 8081, ['gluetun']],
   ['gluetun', 'Gluetun', 'media', 'VPN tunnel for downloads', null, []],
+  ['bazarr', 'Bazarr', 'media', 'Fetches subtitles', 6767, ['sonarr', 'radarr']],
   ['opengym', 'openGym', 'personal', 'Gym tracker for my iPhone', null, []],
 ].map(([id, name, group, description, port, links]) => ({ id, name, group, description, port, url: null, links }));
 

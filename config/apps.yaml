@@ -7,6 +7,8 @@
 # Apps with no matching container show as "planned".
 #
 # links: ids of the apps this one talks to.
+#
+# The media apps are deployed from github.com/isaacxj/stx-media.
 
 groups:
   - id: infrastructure
@@ -68,12 +70,12 @@ apps:
     port: 8096
     container: jellyfin
 
-  - id: jellyseerr
-    name: Jellyseerr
+  - id: seerr
+    name: Seerr
     group: media
     description: Request movies and shows
     port: 5055
-    container: jellyseerr
+    container: seerr
     links: [sonarr, radarr, jellyfin]
 
   - id: sonarr
@@ -103,7 +105,7 @@ apps:
     name: qBittorrent
     group: media
     description: Downloads, only through the VPN
-    port: 8080
+    port: 8081
     container: qbittorrent
     links: [gluetun]
 
@@ -112,6 +114,14 @@ apps:
     group: media
     description: VPN tunnel for downloads
     container: gluetun
+
+  - id: bazarr
+    name: Bazarr
+    group: media
+    description: Fetches subtitles
+    port: 6767
+    container: bazarr
+    links: [sonarr, radarr]
 
   # Personal apps
   - id: opengym
