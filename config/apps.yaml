@@ -8,7 +8,7 @@
 #
 # links: ids of the apps this one talks to.
 #
-# The media apps are deployed from github.com/isaacxj/stx-media.
+# The media apps are deployed from github.com/isaacxj/Netflixx.
 
 groups:
   - id: infrastructure
