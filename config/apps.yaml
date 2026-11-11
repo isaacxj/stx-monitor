@@ -62,6 +62,13 @@ apps:
     description: Nightly restic backups of app configs
     container: restic
 
+  - id: adguard
+    name: AdGuard Home
+    group: infrastructure
+    description: Blocks ads and tracking for the TV, by DNS
+    port: 3053
+    container: adguard
+
   # Media
   - id: jellyfin
     name: Jellyfin

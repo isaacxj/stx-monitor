@@ -25,6 +25,7 @@ const PLAN = [
   ['ntfy', 'ntfy', 'monitoring', 'Push alerts to my iPhone', 2586, []],
   ['caddy', 'Caddy', 'infrastructure', 'HTTPS and subdomains for every app', 443, []],
   ['backups', 'Backups', 'infrastructure', 'Nightly restic backups of app configs', null, []],
+  ['adguard', 'AdGuard Home', 'infrastructure', 'Blocks ads and tracking for the TV, by DNS', 3053, []],
   ['jellyfin', 'Jellyfin', 'media', 'Streams movies and shows, Quick Sync transcoding', 8096, []],
   ['seerr', 'Seerr', 'media', 'Request movies and shows', 5055, ['sonarr', 'radarr', 'jellyfin']],
   ['sonarr', 'Sonarr', 'media', 'Finds and organizes TV shows', 8989, ['prowlarr', 'qbittorrent']],
