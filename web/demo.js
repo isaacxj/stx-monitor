@@ -263,9 +263,27 @@ const HISTORY = [
   { id: 1, started: T0 - 3 * 86400, actor: 'isaac', device: 'iPhone, Safari', action: 'autopilot', target: 'server', status: 'ok', detail: 'Power-outage autopilot on, shut down at 20%' },
 ];
 let autopilot = { enabled: true, threshold: 20 };
+const GiB_ = 1024 ** 3;
+const backups = {
+  state: 'ok', installed: true, helper: true, started: T0 - 7.1 * 3600, finished: T0 - 7 * 3600, error: null,
+  last_ok: T0 - 7 * 3600, last_ok_summary: { data_added: 46.2 * 1024 ** 2, duration: 74, files_new: 212, files_changed: 31 },
+  check: { time: T0 - 3 * 86400, ok: true, detail: '' },
+  apps: [
+    { name: 'jellyfin', size: 2.31 * GiB_, sqlite: true, pause: true },
+    { name: 'sonarr', size: 412 * 1024 ** 2, sqlite: true, pause: true },
+    { name: 'radarr', size: 288 * 1024 ** 2, sqlite: true, pause: true },
+    { name: 'opengym-api-1', size: 61 * 1024 ** 2, sqlite: false, pause: true },
+    { name: 'stx-monitor', size: 38 * 1024 ** 2, sqlite: true, pause: true },
+    { name: 'adguard', size: 24 * 1024 ** 2, sqlite: false, pause: false },
+    { name: 'prowlarr', size: 19 * 1024 ** 2, sqlite: true, pause: true },
+  ],
+  skipped: [{ name: 'qbittorrent', path: '/srv/data', reason: 'on the media or backup drive' }],
+  warnings: [], snapshots: 19, oldest: T0 - 96 * 86400, repo_size: 3.4 * GiB_, drive_free: 862 * GiB_, drive_total: 931 * GiB_,
+  paused: ['jellyfin', 'sonarr', 'radarr', 'stx-monitor', 'prowlarr'], paused_seconds: 74,
+};
 const alerts = {
   configured: true, server: 'ntfy.sh', topic_hint: 'stx…9q',
-  categories: { apps: true, power: true, heat: true, storage: true, security: true, system: false },
+  categories: { apps: true, power: true, heat: true, storage: true, security: true, system: false, backups: true },
   descriptions: {
     apps: 'An app crashes, runs out of memory or fails its health check',
     power: 'Wall power is lost or back, and autopilot shutdowns',
@@ -273,6 +291,7 @@ const alerts = {
     storage: 'A drive is over 90% full',
     security: 'Sign-ins, failed sign-ins and passkey changes',
     system: "Docker can't be reached",
+    backups: 'A nightly backup fails, or none has finished in 36 hours',
   },
   last_sent: { time: T0 - 26 * 60 - 5, title: 'sonarr stopped' }, last_error: null,
 };
@@ -318,6 +337,7 @@ export function createDemo() {
           power_rate: 0.15,
           owner: 'Isaac',
           reports: { unseen: REPORTS.filter((r) => !r.seen).length, recent: REPORTS.map(({ data, ...r }) => ({ ...r, cause: data.cause })) },
+          backups,
         };
       }
       if (path.startsWith('api/session')) {
@@ -378,6 +398,15 @@ export function createDemo() {
         return { ...row };
       }
       if (path === 'api/autopilot') { autopilot = { enabled: body.enabled, threshold: body.threshold }; return autopilot; }
+      if (path === 'api/backups/run') {
+        Object.assign(backups, { state: 'running', started: now() });
+        setTimeout(() => {
+          Object.assign(backups, { state: 'ok', finished: now(), last_ok: now(), snapshots: backups.snapshots + 1,
+            last_ok_summary: { ...backups.last_ok_summary, data_added: 3.1 * 1024 ** 2, duration: 38 } });
+          this.handlers?.backups?.({ ...backups });
+        }, 4000);
+        return { ...backups };
+      }
       if (path === 'api/alerts') { Object.assign(alerts.categories, body.categories); return alerts; }
       if (path === 'api/alerts/test') { alerts.last_sent = { time: now(), title: 'Test alert from stx-monitor' }; return alerts; }
       if (path === 'api/auth/logout') { signedIn = false; return { ok: true }; }

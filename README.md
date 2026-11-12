@@ -31,6 +31,11 @@ the UI with made-up data.*
 - **Phone alerts**: a push through ntfy when an app crashes, the power goes out or comes
   back, the CPU runs hot, a drive passes 90%, or someone signs in. Each type can be turned
   off in Control, and a crash loop buzzes once per 10 minutes, not every few seconds.
+- **Backups**: every night at 3 AM, every app's data goes to the backup drive, encrypted
+  and deduplicated with restic. New apps are found on their own. Apps with a database pause
+  for the minute it takes, so nothing is copied mid-write. Storage shows what's covered and
+  how old the last backup is, with a Back up now button, and you get an alert if one fails
+  or none finishes for 36 hours.
 - **Power-outage autopilot**: on battery at 20% (adjustable), it stops the apps and shuts
   the server down cleanly instead of letting the battery die mid-write.
 - **System** and **Storage**: per-thread load, processes, battery, lid, GPUs, sensors,
@@ -97,8 +102,20 @@ sudo ufw delete allow in on tailscale0 to any port 8090 proto tcp
    includes logs. To keep them entirely on the server, self-host ntfy later and point
    `STX_NTFY_URL` at it, with `STX_NTFY_TOKEN` if it needs an access token.
 
-To update later, run `scripts/deploy.sh` again. It tells you when the helper needs
-reinstalling.
+6. Turn on nightly backups. Mount the external SSD at `/mnt/backup` (the Storage page's
+   "How to set it up" steps, with `/mnt/backup` in place of `/mnt/data` and `nofail` so the
+   server still boots without it), then:
+
+   ```bash
+   sudo ~/stx-monitor/scripts/install-backup.sh
+   ```
+
+   **Save the password it prints in your password manager.** Backups are encrypted with
+   it; if this server's SSD dies, it's the only way to read them anywhere else. The first
+   backup runs at 3 AM, or press **Storage → Back up now**.
+
+To update later, run `scripts/deploy.sh` again. It tells you when the helper or the
+backups need reinstalling.
 
 For autopilot to bring the server back after an outage, set the BIOS to power on when AC
 returns (on Dell laptops this is usually *Power Management → AC Behavior → Wake on AC*).
@@ -140,6 +157,32 @@ docker exec stx-monitor python -m monitor unlock             # end a 15-minute l
 docker exec stx-monitor python -m monitor reset-passkeys     # lost a phone
 docker exec stx-monitor python -m monitor sign-out-everywhere
 ```
+
+## Backups
+
+`stx-backup` runs on the host as root from a systemd timer, not inside the container, so
+stx-monitor never holds the backup password. It writes `/var/lib/stx-backup/status.json`,
+which the monitor reads.
+
+- **What's included**: every folder or Docker volume a container mounts read-write. Left
+  out: read-only mounts, the media drive (`/srv/data`, re-downloadable and far too big),
+  caches, transcodes, logs, and any container labelled `stx.backup: "false"`.
+- **Kept**: 7 daily, 4 weekly and 6 monthly backups. Each night only adds what changed.
+- **Checked**: once a week it reads back 5% of the stored data to prove it's intact.
+- **Paused**: apps with a SQLite database, for about a minute. AdGuard never pauses, so the
+  TV keeps its DNS. Label a container `stx.backup.pause: "false"` to never pause it.
+
+Settings are in `/etc/stx-backup/env`. To get files back:
+
+```bash
+sudo stx-backup snapshots                   # list the backups
+sudo stx-backup restore sonarr              # newest backup of one app, into /var/lib/stx-backup/restore/
+sudo stx-backup restore api --snapshot 3f2a9c1e
+```
+
+It prints the `rsync` command that copies the files back into place. Stop the app first.
+The backups are a normal restic repository, so `restic` itself can read them on any
+machine with the password.
 
 ## Add an app to the map
 
@@ -209,6 +252,6 @@ Settings come from environment variables: `STX_HOST_ROOT`, `DOCKER_HOST` (or `no
 - Sonarr/Radarr download queue and a hardlink check.
 - Disk-full forecast from the growth rate.
 - SMART disk health.
-- Backups with restic, and their age on the overview.
+- An off-site copy of the backups to Backblaze B2.
 - "Ask AI" diagnosis button on a failure report.
 - Deploy panel showing the running commit for each app.

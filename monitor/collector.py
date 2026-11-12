@@ -18,6 +18,7 @@ from . import __version__
 from . import tailscale
 from .actions import UPDATE_CHECK_EVERY, Actions
 from .alerts import Alerts
+from .backups import CHECK_EVERY as BACKUPS_EVERY, Backups
 from .apps import AppsFile, build_map
 from .config import Settings
 from .docker_client import DockerClient
@@ -163,6 +164,7 @@ class Collector:
         self.reports = FailureReports(self)
         self.actions = Actions(self, settings.docker_control_host)
         self.alerts = Alerts(self, settings.ntfy_url, settings.ntfy_token)
+        self.backups = Backups(self)
         self._readings_at = 0.0
         self.boot_id: str | None = None
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
@@ -202,6 +204,7 @@ class Collector:
             asyncio.create_task(self.logs.follow_journal(self.journal), name="journal"),
             asyncio.create_task(self._check_previous_boot(), name="previous-boot"),
             asyncio.create_task(self._update_checks(), name="updates"),
+            asyncio.create_task(self._every(BACKUPS_EVERY, self.backups.check), name="backups"),
         ]
         if self.docker:
             self._tasks.append(asyncio.create_task(
@@ -296,6 +299,8 @@ class Collector:
 
     async def _on_docker_event(self, ev: dict) -> None:
         nice = docker_event_to_event(ev)
+        if ev.get("action") in ("pause", "unpause") and self.backups.paused_by_backup(ev.get("name")):
+            nice = None  # the nightly backup pausing an app for a minute isn't news
         if nice:
             self.add_event(nice)
         if ev.get("action") == "die":
@@ -438,6 +443,7 @@ class Collector:
             "docker": self.docker_state(),
             "build": {"sha": self.settings.git_sha, "version": __version__, "started": self.started},
             "reports": self.reports.summary(),
+            "backups": self.backups.view(),
             "power_rate": self.settings.power_rate,
             "owner": self.settings.owner,
         }

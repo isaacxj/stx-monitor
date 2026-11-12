@@ -436,6 +436,22 @@ async def test_alert(request: Request) -> dict:
         raise HTTPException(502, str(exc)) from exc
 
 
+@app.get("/api/backups")
+async def backups(request: Request) -> dict:
+    col = collector(request)
+    col.backups.load()
+    return col.backups.view()
+
+
+@app.post("/api/backups/run")
+async def run_backup(request: Request) -> dict:
+    user, device = actor(request)
+    try:
+        return await collector(request).backups.run_now(user, device)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @app.post("/api/updates/check", status_code=202)
 async def check_updates(request: Request) -> dict:
     col = collector(request)

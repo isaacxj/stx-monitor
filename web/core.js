@@ -8,7 +8,7 @@ const S = {
   history: { fields: [], live: [], day: [] }, events: [], tailnet: null, docker: {}, build: {},
   owner: '', connected: false, loaded: false,
   session: { authenticated: false, checked: false },
-  reports: { unseen: 0, recent: [] }, reportCache: {}, control: null, account: null,
+  reports: { unseen: 0, recent: [] }, reportCache: {}, control: null, account: null, backups: null,
   ui: { appFilter: 'all', activity: 'all', procs: 'cpu', range: '1h', netRange: '1h',
     logSource: 'all', logLevel: 'all', logQ: '', follow: true },
   detail: { key: null, data: null, loading: false, error: null },

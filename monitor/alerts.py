@@ -44,6 +44,7 @@ CATEGORIES = {
     "storage": "A drive is over 90% full",
     "security": "Sign-ins, failed sign-ins and passkey changes",
     "system": "Docker can't be reached",
+    "backups": "A nightly backup fails, or none has finished in 36 hours",
 }
 DEFAULT_CATEGORIES = {name: True for name in CATEGORIES}
 
@@ -87,6 +88,12 @@ def classify(ev: dict) -> dict | None:
     if kind == "security":
         priority = {"error": 5, "warn": 4}.get(level, 3)
         return {"category": "security", "priority": priority, "tags": ["key"], "key": f"security:{title}"}
+    if kind == "backup":
+        if level in ("error", "warn"):
+            return {"category": "backups", "priority": 4, "tags": ["floppy_disk", "x"], "key": f"backup:{title}"}
+        if level == "ok":
+            return {"category": "backups", "priority": 2, "tags": ["white_check_mark"], "key": "backup:ok"}
+        return None
     if kind == "system":
         if level == "error":
             return {"category": "system", "priority": 4, "tags": ["warning"], "key": f"system:{title}"}

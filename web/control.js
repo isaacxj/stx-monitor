@@ -149,6 +149,7 @@ function sentence(h) {
     case 'shutdown': return 'shut the server down';
     case 'autopilot': return (h.detail || 'changed autopilot').replace(/^Power-outage autopilot/, 'turned power-outage autopilot');
     case 'alerts': return 'changed which phone alerts are sent';
+    case 'backup': return 'started a backup';
     default: return `${h.action} ${name}`.trim();
   }
 }
@@ -224,7 +225,7 @@ function serverPanel(ctl) {
     </div>`);
 }
 
-const ALERT_NAMES = { apps: 'App failures', power: 'Power', heat: 'Heat', storage: 'Disk space', security: 'Sign-ins', system: 'Docker' };
+const ALERT_NAMES = { apps: 'App failures', power: 'Power', heat: 'Heat', storage: 'Disk space', backups: 'Backups', security: 'Sign-ins', system: 'Docker' };
 
 function alertsPanel(ctl) {
   const al = ctl.alerts;

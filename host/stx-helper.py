@@ -4,7 +4,7 @@
 stx-monitor runs in a container and should never be root on the host. A few
 jobs genuinely need the host, though: shutting down, rebooting, restarting
 Docker, cleaning up images, and pulling and recreating a compose service. This
-small service runs those jobs, and nothing else, for whoever connects to its
+small service runs those jobs (and starts a backup), and nothing else, for whoever connects to its
 Unix socket at /run/stx-helper/helper.sock. Only root can open that socket.
 
 Protocol: the client sends one JSON line, {"cmd": "...", "args": {...}}. The
@@ -26,7 +26,7 @@ import sys
 import threading
 import time
 
-VERSION = 1
+VERSION = 2
 SOCKET_DIR = "/run/stx-helper"
 SOCKET_PATH = os.path.join(SOCKET_DIR, "helper.sock")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -127,6 +127,15 @@ def cmd_update(args, emit):
     return True, "Updated to a new image" if after and after != before else "Already up to date"
 
 
+def cmd_backup(args, emit):
+    """Start stx-backup now. It runs on its own; stx-monitor follows it through its status file."""
+    have = subprocess.run(["systemctl", "cat", "stx-backup.service"], capture_output=True, check=False)
+    if have.returncode != 0:
+        return False, "Backups aren't installed. Run scripts/install-backup.sh with sudo."
+    code, tail = run(["systemctl", "start", "--no-block", "stx-backup.service"], emit, timeout=30)
+    return code == 0, "Backup started" if code == 0 else "\n".join(tail[-2:])
+
+
 COMMANDS = {
     "ping": (cmd_ping, False),
     "poweroff": (cmd_poweroff, True),
@@ -134,6 +143,7 @@ COMMANDS = {
     "restart-docker": (cmd_restart_docker, True),
     "prune-images": (cmd_prune_images, True),
     "update": (cmd_update, True),
+    "backup": (cmd_backup, False),
 }
 
 

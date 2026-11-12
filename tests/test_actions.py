@@ -44,7 +44,7 @@ def helper_server(tmp_path):
 async def test_helper_protocol(helper_server):
     client = HelperClient(helper_server.root)
     assert client.installed
-    assert await client.call("ping") == (True, "stx-helper 1")
+    assert await client.call("ping") == (True, "stx-helper 2")
     logs = []
     assert await client.call("prune-images", on_log=logs.append) == (True, "Freed 1.4GB")
     assert logs == ["deleting"]

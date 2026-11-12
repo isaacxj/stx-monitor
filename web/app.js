@@ -451,6 +451,7 @@ function networkTab() {
 views.storage = {
   shell() {
     return `<div class="page-head"><div><span class="kicker">Storage</span><h1 id="r-st-title"></h1></div></div>
+      <div id="r-backups"></div>
       <div class="disks" id="r-disks"></div>
       <section style="display:flex;flex-direction:column;gap:10px"><h2>Mounted filesystems</h2><div id="r-mounts" class="mounts"></div></section>
       <div class="cells" id="r-io"></div>`;
@@ -462,6 +463,7 @@ views.storage = {
     region('r-st-title', !S.host ? 'Waiting for data' : idle.length ? `${plural(idle.length, 'drive')} waiting to be set up` : `${plural(disks.length, 'drive')}, all in use`);
     const mounts = h.mounts || [];
     const io = h.disk_io || {};
+    region('r-backups', backupsPanel(S.backups));
     region('r-disks', disks.map((d) => {
       const kind = `${d.kind === 'hdd' ? 'hard drive' : 'SSD'}, ${d.usb ? 'over USB' : 'internal'}`;
       const model = d.model || d.name;
@@ -503,6 +505,48 @@ views.storage = {
       <div class="cell"><span class="label">Writing</span><span class="value num">${fixed(sum('write_rate') / 1e6)} <small>MB/s</small></span></div>`);
   },
 };
+
+const BACKUP_STATE = {
+  ok: ['Backed up', ''], running: ['Backing up now', ''], failed: ['Last backup failed', 'red'],
+  stale: ['Overdue', 'amber'], never: ['No backup yet', 'amber'], 'not-installed': ['Not set up', 'amber'],
+};
+
+function backupsPanel(b) {
+  if (!b) return '';
+  const [label, tone] = BACKUP_STATE[b.state] || ['Unknown', 'amber'];
+  const canRun = b.installed && b.helper && b.state !== 'running';
+  const head = `<div class="row-head"><span class="kicker">Backups</span><span style="display:flex;gap:10px;align-items:center">
+      <span class="kicker ${tone}">${esc(label)}</span>
+      <button type="button" class="btn sm quiet" data-action="backup-now" ${canRun ? '' : 'disabled'}>Back up now</button></span></div>`;
+  if (b.state === 'not-installed') {
+    return panel(`${head}
+      <span class="soft" style="font-size:14px">Nothing is backing up this server's app data yet. A dead SSD would take every app's settings and your workout history with it.</span>
+      <details class="howto" open><summary>How to set it up</summary><ol>
+        <li>Mount the external SSD at <code>/mnt/backup</code> the same way as any drive (below), with <code>nofail</code>.</li>
+        <li>Install the nightly backup: <code>sudo ~/stx-monitor/scripts/install-backup.sh</code></li>
+        <li>Save the password it prints in your password manager. Without it the backups can't be read.</li>
+      </ol></details>`);
+  }
+  const s = b.last_ok_summary || {};
+  let line;
+  if (b.state === 'running') line = `Started ${esc(ago(b.started))}${b.paused?.length ? `. ${esc(b.paused.join(', '))} paused until it's done.` : '.'}`;
+  else if (b.state === 'failed') line = `<span class="red-text">${esc(b.error || 'Failed')}</span>${b.last_ok ? ` Last good backup ${esc(ago(b.last_ok))}.` : ''}`;
+  else if (b.last_ok) line = `Last backup ${esc(ago(b.last_ok))}: ${bytes(s.data_added)} new, took ${duration(s.duration || 0)}. Runs every night at 3 AM.`;
+  else line = 'Installed. The first backup runs tonight at 3 AM, or press Back up now.';
+  const cells = b.last_ok ? `<div class="cells three" style="margin-top:4px">
+      <div class="cell"><span class="label">Apps covered</span><span class="value num">${(b.apps || []).length}</span><span class="note">${bytes((b.apps || []).reduce((a, x) => a + (x.size || 0), 0))} of data</span></div>
+      <div class="cell"><span class="label">Kept</span><span class="value num">${b.snapshots ?? '–'}</span><span class="note">${b.oldest ? `back to ${esc(clock(b.oldest, true))}` : 'backups'}</span></div>
+      <div class="cell"><span class="label">Backup drive</span><span class="value num">${bytes(b.repo_size)}</span><span class="note">${bytes(b.drive_free)} free</span></div>
+    </div>` : '';
+  const apps = (b.apps || []).slice().sort((x, y) => (y.size || 0) - (x.size || 0)).map((a) => `<div class="list-row">
+      <span style="flex:1;min-width:0">${esc(a.name)}${a.sqlite && a.pause ? '<span class="tag">paused while backing up</span>' : ''}</span>
+      <span class="muted num" style="font-size:13px">${bytes(a.size)}</span></div>`).join('');
+  const check = b.check ? `<span class="${b.check.ok ? 'muted' : 'red-text'}" style="font-size:13px">${b.check.ok ? 'Integrity check passed' : `Integrity check failed: ${esc(b.check.detail)}`} ${esc(ago(b.check.time))}.</span>` : '';
+  const warns = (b.warnings || []).map((w) => `<span class="amber-text" style="font-size:13px">${esc(w)}</span>`).join('');
+  const skipped = (b.skipped || []).length ? `<details class="howto"><summary>Left out (${b.skipped.length})</summary><ol>${b.skipped.map((x) => `<li>${esc(x.name)}${x.path ? ` <code>${esc(x.path)}</code>` : ''}: ${esc(x.reason)}</li>`).join('')}</ol></details>` : '';
+  const helperNote = b.helper ? '' : '<span class="muted" style="font-size:13px">Back up now needs stx-helper (<code>scripts/install-helper.sh</code>).</span>';
+  return panel(`${head}<span class="soft" style="font-size:14px">${line}</span>${cells}${apps ? `<div>${apps}</div>` : ''}${check}${warns}${skipped}${helperNote}`);
+}
 
 // ================================================================ the shell
 let mounted = null;
@@ -553,9 +597,10 @@ function applyOverview(o) {
   Object.assign(S, {
     identity: o.identity || {}, host: o.host, containers: o.containers || [], apps: o.apps || S.apps,
     history: o.history || S.history, events: o.events || [], tailnet: o.tailnet, docker: o.docker || {},
-    build: o.build || {}, owner: o.owner || '', reports: o.reports || S.reports, loaded: true,
+    build: o.build || {}, owner: o.owner || '', reports: o.reports || S.reports, backups: o.backups || null, loaded: true,
   });
 }
+function applyBackups(b) { S.backups = b; render(); }
 function applyTick(d) {
   S.host = d.host;
   S.containers = d.containers || S.containers;
@@ -629,7 +674,7 @@ async function loadLogs(id, tail = S.logs.key === id ? S.logs.tail : 200) {
 let stream = null;
 function connect() {
   if (net.api) {
-    net.api.subscribe({ tick: applyTick, event: applyEvent, report: onReport, action: onAction });
+    net.api.subscribe({ tick: applyTick, event: applyEvent, report: onReport, action: onAction, backups: applyBackups });
     S.connected = true;
     return;
   }
@@ -640,6 +685,7 @@ function connect() {
   stream.addEventListener('report', (e) => onReport(JSON.parse(e.data)));
   stream.addEventListener('reports', (e) => { S.reports.unseen = JSON.parse(e.data).unseen; render(); });
   stream.addEventListener('action', (e) => onAction(JSON.parse(e.data)));
+  stream.addEventListener('backups', (e) => applyBackups(JSON.parse(e.data)));
   stream.onopen = () => { const was = S.connected; S.connected = true; if (!was) loadOverview(); };
   stream.onerror = async () => {
     S.connected = false;
@@ -686,6 +732,11 @@ document.addEventListener('click', async (e) => {
     const text = S.logs.lines.map((l) => `${l.ts || ''} ${l.text}`).join('\n');
     try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied'; } catch { btn.textContent = 'Copy failed'; }
     setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    return;
+  } else if (action === 'backup-now') {
+    btn.disabled = true;
+    toast('Starting a backup…', 'busy');
+    try { applyBackups(await postJSON('api/backups/run')); toast('Backup started. Apps with a database pause for about a minute.', 'ok'); } catch (err) { toast(err.message, 'error'); btn.disabled = false; }
     return;
   } else if (action === 'run') {
     await askAndRun(btn.dataset.verb, btn.dataset.target);
