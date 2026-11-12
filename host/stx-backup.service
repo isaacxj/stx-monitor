@@ -1,0 +1,12 @@
+[Unit]
+Description=stx-backup: back up every app's data to the backup drive
+After=docker.service local-fs.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/stx-monitor/stx-backup.py run
+# Stay out of the way of anything people are actually using.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=6h

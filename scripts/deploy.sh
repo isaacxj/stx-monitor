@@ -16,3 +16,10 @@ if ! cmp -s host/stx-helper.py /usr/local/lib/stx-monitor/stx-helper.py 2>/dev/n
   echo "stx-helper is missing or out of date. Install it with:"
   echo "  sudo $(pwd)/scripts/install-helper.sh"
 fi
+
+if ! cmp -s host/stx-backup.py /usr/local/lib/stx-monitor/stx-backup.py 2>/dev/null \
+  || ! cmp -s host/stx-backup.timer /etc/systemd/system/stx-backup.timer 2>/dev/null; then
+  echo
+  echo "Nightly backups are missing or out of date. Install them with:"
+  echo "  sudo $(pwd)/scripts/install-backup.sh"
+fi
