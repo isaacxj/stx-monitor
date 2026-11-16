@@ -36,6 +36,18 @@ the UI with made-up data.*
   for the minute it takes, so nothing is copied mid-write. Storage shows what's covered and
   how old the last backup is, with a Back up now button, and you get an alert if one fails
   or none finishes for 36 hours.
+- **Scheduled tasks**: the housekeeping runs by itself and reports back in Control: a daily
+  check for app updates, a weekly image cleanup, a daily drive health check and a weekly
+  report. Each can be switched off or run on the spot, and every run lands in History.
+  Installing app updates unattended is there too, off until you turn it on.
+- **Weekly report**: Sunday at 9 AM, a short summary on your phone: crashes, backups, how
+  full each drive is and when it will fill up, drive health, updates waiting.
+- **Drive health and fill-up forecast**: Storage shows each drive's own health verdict
+  (SMART), its temperature and age, and how many days until it is full at the rate it has
+  been growing. You get an alert when a drive starts failing or has under two weeks left.
+- **Now playing**: who is watching on Jellyfin, and whether the stream is played directly,
+  converted on Quick Sync, or converted on the CPU (which gets an event, since one such
+  stream can use most of the processor).
 - **Power-outage autopilot**: on battery at 20% (adjustable), it stops the apps and shuts
   the server down cleanly instead of letting the battery die mid-write.
 - **System** and **Storage**: per-thread load, processes, battery, lid, GPUs, sensors,
@@ -114,6 +126,20 @@ sudo ufw delete allow in on tailscale0 to any port 8090 proto tcp
    it; if this server's SSD dies, it's the only way to read them anywhere else. The first
    backup runs at 3 AM, or press **Storage → Back up now**.
 
+7. Turn on Now playing (optional). In Jellyfin, open **Dashboard → API Keys**, make a key
+   named stx-monitor, and put it in `~/stx-monitor/.env`:
+
+   ```bash
+   echo "STX_JELLYFIN_KEY=<the key>" >> ~/stx-monitor/.env
+   ```
+
+   ```bash
+   ~/stx-monitor/scripts/deploy.sh
+   ```
+
+   The key only lets stx-monitor read Jellyfin. If Jellyfin isn't at
+   `http://127.0.0.1:8096`, set `STX_JELLYFIN_URL` as well.
+
 To update later, run `scripts/deploy.sh` again. It tells you when the helper or the
 backups need reinstalling.
 
@@ -158,6 +184,29 @@ docker exec stx-monitor python -m monitor reset-passkeys     # lost a phone
 docker exec stx-monitor python -m monitor sign-out-everywhere
 ```
 
+## Scheduled tasks
+
+| Task | When (server time) | Starts out |
+| --- | --- | --- |
+| Back up app data | Every day at 3:00 AM | On, once backups are installed |
+| Check for app updates | Every day at 4:30 AM | On |
+| Install app updates | Mondays at 5:00 AM | Off |
+| Clean up unused images | Sundays at 4:00 AM | On |
+| Check drive health | Every day at 6:00 AM | On |
+| Weekly report | Sundays at 9:00 AM | On |
+
+If the server was off at a task's time, the task runs when the server is back, as long as
+that is within six hours; otherwise it waits for its next slot. The backup is run by a
+systemd timer on the host, not by stx-monitor, so it works even when the console is down.
+Cleanup, installing updates and the drive check go through stx-helper.
+
+Drive health uses `smartctl`, which `scripts/install-helper.sh` installs. Some USB
+enclosures don't pass SMART through; those drives show "Health not reported".
+
+The fill-up forecast needs three days of history before it says anything. It fits a straight
+line through up to 30 days of daily readings, so one big download moves it less than a
+steady trend does.
+
 ## Backups
 
 `stx-backup` runs on the host as root from a systemd timer, not inside the container, so
@@ -200,7 +249,7 @@ Four pieces, each with as little power as it needs:
 | **stx-monitor** (container) | Reads the host through a read-only mount of `/` at `/host`. Runs as root inside the container, which it needs for the CPU energy counter (RAPL), the host's `/proc/1/net` and running the host's `journalctl` with `chroot`. Listens on localhost only. |
 | **stx-docker-proxy** | Read-only Docker API: containers, stats, logs, events, image and disk info. Every POST is refused. |
 | **stx-docker-control** | A second proxy that allows only start, stop and restart. It can't create, delete, exec into or even list containers. |
-| **stx-helper** (systemd service on the host) | A short list of root jobs: power off, reboot, restart Docker, prune images, pull and recreate one compose service. Nothing else, and only root can open its socket. |
+| **stx-helper** (systemd service on the host) | A short list of root jobs: power off, reboot, restart Docker, prune images, pull and recreate one compose service, read each drive's SMART record. Nothing else, and only root can open its socket. |
 
 The container never touches `/var/run/docker.sock` and never gets root on the host. It
 can't stop itself or either proxy. Everything it keeps (events, failure reports, action
@@ -243,15 +292,12 @@ Open `http://localhost:8090` (run `python -m monitor set-password` first), or
 Settings come from environment variables: `STX_HOST_ROOT`, `DOCKER_HOST` (or `none`),
 `STX_DOCKER_CONTROL_HOST`, `STX_APPS_FILE`, `STX_DATA_DIR`, `STX_BIND` (127.0.0.1),
 `STX_PORT` (8090), `STX_POWER_RATE` (0.15 $/kWh), `STX_OWNER`, `STX_PUBLIC_URL`,
-`STX_NTFY_URL`, `STX_NTFY_TOKEN`,
+`STX_NTFY_URL`, `STX_NTFY_TOKEN`, `STX_JELLYFIN_URL`, `STX_JELLYFIN_KEY`,
 `STX_GIT_SHA`, and for development only `STX_AUTH=off` and `STX_INSECURE_COOKIE=1`.
 
 ## Roadmap
 
-- Jellyfin now playing, with a hardware vs software transcode badge.
 - Sonarr/Radarr download queue and a hardlink check.
-- Disk-full forecast from the growth rate.
-- SMART disk health.
 - An off-site copy of the backups to Backblaze B2.
 - "Ask AI" diagnosis button on a failure report.
 - Deploy panel showing the running commit for each app.

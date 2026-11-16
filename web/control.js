@@ -101,6 +101,22 @@ export async function askAndRun(verb, target = '') {
   }
 }
 
+// Tasks started with "Run now": action name -> label, so the result gets a toast.
+const watching = new Set();
+
+export async function runTask(task, busyText) {
+  try {
+    await postJSON('api/schedule/run', { task });
+    watching.add(task);
+    toast(busyText, 'busy');
+  } catch (err) { toast(err.message || String(err), 'error'); }
+}
+
+export function onSchedule(view) {
+  if (S.control) S.control.schedule = view;
+  hooks.render();
+}
+
 // A history row changed (started, finished, failed).
 export function onAction(row) {
   if (S.control) {
@@ -113,6 +129,10 @@ export function onAction(row) {
     const what = sentence(row);
     toast(row.status === 'ok' ? `Done: ${what}${row.detail ? `. ${row.detail}` : ''}` : `Didn't work: ${row.detail || what}`, row.status === 'ok' ? 'ok' : 'error');
     loadControl();
+  }
+  if (row.status !== 'running' && watching.has(row.action)) {
+    watching.delete(row.action);
+    toast(row.status === 'ok' ? row.detail || 'Done' : `Didn't work: ${row.detail || sentence(row)}`, row.status === 'ok' ? 'ok' : 'error');
   }
   hooks.render();
 }
@@ -150,19 +170,28 @@ function sentence(h) {
     case 'autopilot': return (h.detail || 'changed autopilot').replace(/^Power-outage autopilot/, 'turned power-outage autopilot');
     case 'alerts': return 'changed which phone alerts are sent';
     case 'backup': return 'started a backup';
+    case 'check-updates': return 'checked for app updates';
+    case 'update-apps': return 'installed app updates';
+    case 'disk-health': return 'checked drive health';
+    case 'weekly-report': return 'made the weekly report';
+    case 'schedule': return `changed a scheduled task${h.detail ? ` (${h.detail})` : ''}`;
     default: return `${h.action} ${name}`.trim();
   }
 }
 
 function historyRow(h) {
   const who = h.actor === S.session.user ? 'You' : h.actor;
+  // Scheduled tasks say how the run went (e.g. "2 updates available") on a second line.
+  const result = TASK_ACTIONS.has(h.action) && h.status === 'ok' && h.detail ? `<span class="muted">${esc(h.detail)}</span>` : '';
   const status = h.status === 'running' ? '<span class="muted">working…</span>'
     : h.status === 'failed' ? `<span class="red-text">failed: ${esc(h.detail)}</span>`
     : h.status === 'refused' ? `<span class="amber-text">refused: ${esc(h.detail)}</span>`
-    : h.status === 'unknown' ? `<span class="muted">${esc(h.detail)}</span>` : '';
+    : h.status === 'unknown' ? `<span class="muted">${esc(h.detail)}</span>` : result;
   const from = h.device ? ` <span class="muted">from ${esc(h.device.split(',')[0])}</span>` : '';
   return `<li><span class="when num">${esc(clock(h.started, true))}</span><span><b>${esc(who)}</b> ${esc(sentence(h))}${from}${status ? `<br>${status}` : ''}</span></li>`;
 }
+
+const TASK_ACTIONS = new Set(['check-updates', 'update-apps', 'disk-health', 'weekly-report']);
 
 function note(c) {
   if (PROTECTED_NOTE[c.name]) return PROTECTED_NOTE[c.name];
@@ -211,10 +240,6 @@ function serverPanel(ctl) {
       <span class="setting-text"><b>Clean up unused images</b><span class="muted">${ctl.prune_bytes ? `Frees about ${bytes(ctl.prune_bytes)}` : 'Deletes images no container uses'}</span></span>
       <button type="button" class="btn sm" data-action="run" data-verb="prune-images" ${disabled}>Clean up</button>
     </div>
-    <div class="setting">
-      <span class="setting-text"><b>Back up app settings</b><span class="muted">Set up backups first</span></span>
-      <button type="button" class="btn sm" disabled>Back up now</button>
-    </div>
     <div class="risky">
       <span class="kicker red">Risky</span>
       <div class="row-actions" style="justify-content:flex-start">
@@ -225,7 +250,32 @@ function serverPanel(ctl) {
     </div>`);
 }
 
-const ALERT_NAMES = { apps: 'App failures', power: 'Power', heat: 'Heat', storage: 'Disk space', backups: 'Backups', security: 'Sign-ins', system: 'Docker' };
+const ALERT_NAMES = { apps: 'App failures', power: 'Power', heat: 'Heat', storage: 'Disks', backups: 'Backups', security: 'Sign-ins', system: 'Docker', updates: 'App updates', reports: 'Weekly report' };
+
+// Housekeeping the server does by itself. Each row: what, when, how the last run went.
+function schedulePanel(ctl) {
+  const sch = ctl.schedule;
+  if (!sch) return '';
+  const rows = sch.tasks.map((t) => {
+    let last;
+    if (t.running) last = 'Running now';
+    else if (t.managed && !t.installed) last = 'Not set up. See Storage.';
+    else if (!t.last_run) last = 'Has not run yet';
+    else last = `Last ran ${esc(ago(t.last_run))}${t.ok === false ? '' : t.detail ? `: ${esc(t.detail)}` : ''}`;
+    const failed = t.ok === false && !t.running ? `<span class="red-text">Last run failed${t.detail ? `: ${esc(t.detail)}` : ''}</span>` : '';
+    const next = t.unavailable ? `<span class="amber-text">${esc(t.unavailable)}</span>` : t.enabled && t.next_run ? `Next ${esc(clock(t.next_run, true))}` : '';
+    const report = t.id === 'weekly-report' && sch.report ? `<details class="howto"><summary>${esc(sch.report.title)}, ${esc(ago(sch.report.time))}</summary><ol>${sch.report.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ol></details>` : '';
+    const controls = t.managed
+      ? '<a class="btn sm quiet" href="#/storage">Open</a>'
+      : `<button type="button" class="btn sm quiet" data-action="task-run" data-task="${esc(t.id)}" data-name="${esc(t.name)}" ${t.running || t.unavailable ? 'disabled' : ''}>Run now</button>
+         <button type="button" role="switch" class="switch" aria-checked="${!!t.enabled}" aria-label="${esc(t.name)}, ${esc(t.when)}" data-action="task-toggle" data-task="${esc(t.id)}" data-name="${esc(t.name)}"><span></span></button>`;
+    return `<div class="setting task">
+      <span class="setting-text"><b>${esc(t.name)}</b><span class="muted">${esc(t.when)}${next ? ` · ${next}` : ''}</span>
+        <span class="muted">${last}</span>${failed}${report}</span>
+      <span class="task-controls">${controls}</span></div>`;
+  }).join('');
+  return panel(`<div class="row-head"><h2>Scheduled tasks</h2><span class="muted" style="font-size:13px">Server time${sch.timezone ? `, ${esc(sch.timezone.replace(/_/g, ' '))}` : ''}</span></div>${rows}`);
+}
 
 function alertsPanel(ctl) {
   const al = ctl.alerts;
@@ -315,7 +365,7 @@ views.control = {
     region('r-ctl-notes', notes.map((n) => `<div class="banner">${n}</div>`).join(''));
     const rows = [...ctl.containers].sort((a, b) => (a.state === 'running') - (b.state === 'running') || a.display.localeCompare(b.display));
     region('r-ctl-rows', rows.map(appRow).join('') || '<tr><td colspan="3" class="empty">No containers.</td></tr>');
-    region('r-ctl-server', serverPanel(ctl) + alertsPanel(ctl));
+    region('r-ctl-server', serverPanel(ctl) + schedulePanel(ctl) + alertsPanel(ctl));
     region('r-ctl-history', ctl.history.slice(0, 12).map(historyRow).join('') || '<li class="empty">Nothing yet.</li>');
     region('r-ctl-account', accountPanel());
   },
@@ -351,8 +401,27 @@ document.addEventListener('click', async (e) => {
     try { S.control.alerts = await postJSON('api/alerts/test'); toast('Test alert sent. Check your phone.', 'ok'); } catch (err) { toast(err.message, 'error'); }
     loadControl();
   } else if (action === 'check-updates') {
-    try { await postJSON('api/updates/check'); toast('Checking each image for updates. This takes a minute.', 'busy'); } catch (err) { toast(err.message, 'error'); }
-    setTimeout(loadControl, 30_000);
+    await runTask('check-updates', 'Checking each image for updates. This takes a minute.');
+  } else if (action === 'task-run') {
+    const { task, name } = el.dataset;
+    if (task === 'update-apps') {
+      const ok = await confirmAction({ title: 'Install app updates now?', body: 'Every app with a newer image is downloaded and recreated with the same settings, one at a time. Each is unavailable for up to a minute.', confirmLabel: 'Install updates' });
+      if (!ok) return;
+    }
+    await runTask(task, `${name}…`);
+  } else if (action === 'task-toggle' && S.control?.schedule) {
+    const { task, name } = el.dataset;
+    const t = S.control.schedule.tasks.find((x) => x.id === task);
+    const on = !t?.enabled;
+    if (on && task === 'update-apps') {
+      const ok = await confirmAction({ title: 'Let apps update themselves?', body: `${esc(t.when)}, every app with a newer image is downloaded and recreated without asking. An update that breaks an app will go in unattended; the nightly backup is your way back.`, confirmLabel: 'Turn on', danger: true });
+      if (!ok) return;
+    }
+    try {
+      S.control.schedule = await postJSON('api/schedule', { task, enabled: on });
+      toast(`${name}: ${on ? 'on' : 'off'}`, 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+    hooks.render();
   } else if (action === 'add-passkey') {
     try {
       const name = await addPasskey();

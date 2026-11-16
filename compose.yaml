@@ -31,6 +31,9 @@ services:
       # Phone alerts through ntfy. Set these in .env next to this file (it's gitignored).
       STX_NTFY_URL: ${STX_NTFY_URL:-}
       STX_NTFY_TOKEN: ${STX_NTFY_TOKEN:-}
+      # Jellyfin now playing. Make an API key in Jellyfin (Dashboard, API Keys) and put it in .env.
+      STX_JELLYFIN_URL: ${STX_JELLYFIN_URL:-}
+      STX_JELLYFIN_KEY: ${STX_JELLYFIN_KEY:-}
     volumes:
       # The whole host filesystem, read-only. rslave lets drives mounted later
       # on the host show up inside the container too. This is also how the

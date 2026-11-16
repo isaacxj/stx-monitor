@@ -9,6 +9,7 @@ const S = {
   owner: '', connected: false, loaded: false,
   session: { authenticated: false, checked: false },
   reports: { unseen: 0, recent: [] }, reportCache: {}, control: null, account: null, backups: null,
+  storageHealth: null, jellyfin: null, updates: { available: 0 },
   ui: { appFilter: 'all', activity: 'all', procs: 'cpu', range: '1h', netRange: '1h',
     logSource: 'all', logLevel: 'all', logQ: '', follow: true },
   detail: { key: null, data: null, loading: false, error: null },
