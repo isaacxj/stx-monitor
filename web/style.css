@@ -553,3 +553,22 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; color
 .phone-only { display: none !important; }
 @media (max-width: 899px) { .phone-only { display: flex !important; } }
 .tab-count:not(:empty) { margin-left: 6px; }
+
+/* Scheduled tasks, now playing, drive health */
+.tag.accent { border-color: var(--cyan); color: var(--cyan); }
+.tag.amber { border-color: var(--amber); color: var(--amber); }
+.setting.task { align-items: flex-start; }
+.setting.task:last-child { border-bottom: 0; padding-bottom: 0; }
+.setting.task .setting-text { gap: 2px; min-width: 0; }
+.setting.task .red-text, .setting.task .amber-text { font-size: 13px; }
+.task-controls { display: flex; align-items: center; gap: 10px; flex: none; }
+.play { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.play .tag { white-space: nowrap; }
+.health { font-size: 13px; }
+.health.ok { color: var(--cyan); }
+.health.ok .muted { color: var(--muted); }
+.st-health { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 520px) {
+  .setting.task { flex-direction: column; }
+  .task-controls { align-self: flex-end; }
+}

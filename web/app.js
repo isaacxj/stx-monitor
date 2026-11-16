@@ -9,7 +9,7 @@ import {
   netTotals, onBattery, panel, pct, plural, rangeSeg, rate, region, ring, route, series, sparkline, stoppedSentence,
   toEpoch, views, hooks, net, getJSON, postJSON, toast,
 } from './core.js';
-import { askAndRun, loadControl, onAction } from './control.js';
+import { askAndRun, loadControl, onAction, onSchedule, runTask } from './control.js';
 import { closeLogStream, onReport } from './logs.js';
 import './login.js';
 
@@ -40,6 +40,7 @@ views.overview = {
         <div id="r-alert"></div>
         <div class="panel"><div class="in" id="r-appsum"></div></div>
         <div class="cells" id="r-quick"></div>
+        <div id="r-playing"></div>
       </div>
     </div>
     <div class="readouts" id="r-readouts"></div>`;
@@ -88,7 +89,9 @@ views.overview = {
         <div class="count"><b style="color:${counts.down ? 'var(--red-soft)' : 'var(--muted)'}">${counts.down ?? 0}</b><span>Down</span></div>
         <div class="count"><b style="color:var(--muted)">${counts.planned ?? 0}</b><span>Planned</span></div>
       </div>
-      <div class="segbar" aria-hidden="true">${bar}</div>`);
+      <div class="segbar" aria-hidden="true">${bar}</div>
+      ${S.updates?.available ? `<a href="#/control" style="font-size:14px">${plural(S.updates.available, 'app update')} available</a>` : ''}`);
+    region('r-playing', nowPlayingPanel(S.jellyfin));
 
     const b = battery();
     const ps = h.power_supply;
@@ -114,6 +117,32 @@ views.overview = {
     ].join(''));
   },
 };
+
+// Who is watching on Jellyfin, and whether the server is converting the video for them.
+function playTime(sec) {
+  if (!isNum(sec)) return '–';
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+}
+function nowPlayingPanel(j) {
+  if (!j?.configured) return '';
+  if (j.ok === false) return panel(`<span class="kicker amber">Now playing</span><span class="muted" style="font-size:14px">${esc(j.error || "Jellyfin isn't answering")}</span>`);
+  if (!j.sessions.length) return panel('<div class="row-head"><span class="kicker">Now playing</span><span class="muted" style="font-size:14px">Nothing is playing</span></div>');
+  const rows = j.sessions.map((s) => {
+    const frac = isNum(s.position) && s.runtime ? clamp(s.position / s.runtime, 0, 1) : null;
+    const tone = s.mode === 'software' ? 'amber' : '';
+    const why = s.mode === 'software' ? '<span class="amber-text" style="font-size:13px">Quick Sync is not being used, so this stream is heavy on the processor.</span>' : '';
+    return `<div class="play">
+      <div class="row-head"><span style="min-width:0"><b style="font-weight:600">${esc(s.title)}</b>${s.subtitle ? ` <span class="muted" style="font-size:13px">${esc(s.subtitle)}</span>` : ''}</span>
+        <span class="tag ${tone}" style="margin-left:0">${esc(s.label)}</span></div>
+      <span class="muted" style="font-size:13px">${esc(s.user)}${s.device ? ` on ${esc(s.device)}` : ''}${s.paused ? ', paused' : ''}</span>
+      ${frac == null ? '' : `<span class="bar" role="img" aria-label="${Math.round(frac * 100)}% watched"><i class="${tone}" style="width:${(frac * 100).toFixed(1)}%"></i></span>
+      <span class="muted num" style="font-size:12px">${playTime(s.position)} of ${playTime(s.runtime)}</span>`}
+      ${why}</div>`;
+  }).join('');
+  return panel(`<div class="row-head"><span class="kicker">Now playing</span><span class="muted" style="font-size:14px">${plural(j.sessions.length, 'stream')}</span></div>${rows}`);
+}
 
 // ---------------------------------------------------------------------- apps
 const STATUS_WORD = { running: 'Running', down: 'Down', unhealthy: 'Unhealthy', restarting: 'Restarting', paused: 'Paused', starting: 'Starting', planned: 'Planned' };
@@ -204,8 +233,9 @@ function card(a, current, linked) {
   else if (a.status === 'running') state = `${isNum(c.cpu) ? fixed(c.cpu, c.cpu < 10 ? 1 : 0) + '% CPU' : 'Running'}${isNum(c.mem) ? ', ' + bytes(c.mem) : ''}`;
   else state = STATUS_WORD[a.status] || a.status;
   const dot = down ? 'red' : warn ? 'amber' : '';
+  const update = S.containers.find((x) => x.id === c.id)?.update?.available ? '<span class="tag accent">Update</span>' : '';
   return `<a class="card ${down ? 'is-down' : warn ? 'is-warn' : ''} ${linked ? 'linked' : ''}" href="${href}" ${cur}><span class="in">
-    <span class="card-top"><span class="card-name">${esc(a.name)}</span><span class="dot ${dot}" aria-hidden="true"></span></span>
+    <span class="card-top"><span class="card-name">${esc(a.name)}${update}</span><span class="dot ${dot}" aria-hidden="true"></span></span>
     <span class="card-role">${esc(a.description)}</span>
     <span class="card-state num">${esc(state)}<span class="sr-only">, status ${esc(STATUS_WORD[a.status] || a.status)}</span></span></span></a>`;
 }
@@ -450,7 +480,7 @@ function networkTab() {
 // ------------------------------------------------------------------- storage
 views.storage = {
   shell() {
-    return `<div class="page-head"><div><span class="kicker">Storage</span><h1 id="r-st-title"></h1></div></div>
+    return `<div class="page-head"><div><span class="kicker">Storage</span><h1 id="r-st-title"></h1></div><div id="r-st-health" class="st-health"></div></div>
       <div id="r-backups"></div>
       <div class="disks" id="r-disks"></div>
       <section style="display:flex;flex-direction:column;gap:10px"><h2>Mounted filesystems</h2><div id="r-mounts" class="mounts"></div></section>
@@ -464,6 +494,13 @@ views.storage = {
     const mounts = h.mounts || [];
     const io = h.disk_io || {};
     region('r-backups', backupsPanel(S.backups));
+    const sh = S.storageHealth || { forecast: {}, smart: { disks: [] } };
+    const smart = sh.smart || { disks: [] };
+    region('r-st-health', `<span class="muted" style="font-size:13px">${smart.checking ? 'Checking drive health…'
+      : smart.error ? `<span class="amber-text">${esc(smart.error)}</span>`
+      : smart.checked ? `Drive health checked ${esc(ago(smart.checked))}`
+      : smart.helper === false ? 'Drive health needs stx-helper' : 'Drive health not checked yet'}</span>
+      <button type="button" class="btn sm quiet" data-action="disk-health" ${smart.checking || smart.helper === false ? 'disabled' : ''}>Check now</button>`);
     region('r-disks', disks.map((d) => {
       const kind = `${d.kind === 'hdd' ? 'hard drive' : 'SSD'}, ${d.usb ? 'over USB' : 'internal'}`;
       const model = d.model || d.name;
@@ -494,6 +531,8 @@ views.storage = {
           <span class="soft" style="font-size:13px">${bytes(main.used)} of ${bytes(main.total)} used</span>
           <span class="muted" style="font-size:12px">${driveSize(d.size)} ${esc(kind)}, ${esc(d.name)}</span>
           <span class="muted num" style="font-size:12px">Reading ${rate(dio.read_rate)} · Writing ${rate(dio.write_rate)}</span>
+          ${healthLine(smart.disks.find((x) => x.name === d.name))}
+          ${forecastLine(sh.forecast[main.mountpoint])}
         </div>`, 'disk');
     }).join('') || '<span class="empty">No physical drives found in /sys/block.</span>');
     region('r-mounts', mounts.map((m) => `<div class="mount">
@@ -505,6 +544,26 @@ views.storage = {
       <div class="cell"><span class="label">Writing</span><span class="value num">${fixed(sum('write_rate') / 1e6)} <small>MB/s</small></span></div>`);
   },
 };
+
+// One line per drive from its SMART record: the verdict, then temperature and age.
+function healthLine(s) {
+  if (!s) return '';
+  const facts = [isNum(s.temp) ? `${s.temp} °C` : null, isNum(s.hours) ? `${duration(s.hours * 3600).split(',')[0]} powered on` : null,
+    isNum(s.wear) ? `${s.wear}% of rated life used` : null].filter(Boolean).join(', ');
+  if (s.state === 'ok') return `<span class="health ok">Healthy${facts ? `<span class="muted">, ${esc(facts)}</span>` : ''}</span>`;
+  if (s.state === 'unknown') return `<span class="health muted" title="${esc(s.sentence)}">Health not reported</span>`;
+  return `<span class="health ${s.state === 'failing' ? 'red-text' : 'amber-text'}"><b>${s.state === 'failing' ? 'Failing' : 'Showing wear'}.</b> ${esc(s.sentence)}</span>`;
+}
+// When this filesystem fills up, from how fast it has been growing.
+function forecastLine(f) {
+  if (!f) return '';
+  if (!isNum(f.growth_per_day)) return `<span class="muted" style="font-size:12px">Fill-up forecast after ${f.days_of_data >= 2 ? 'one more day' : 'a few days'} of history</span>`;
+  const growth = `${f.growth_per_day >= 0 ? 'Growing' : 'Shrinking'} ${bytes(Math.abs(f.growth_per_day))} a day`;
+  if (!isNum(f.days_left)) return `<span class="muted" style="font-size:12px">${f.growth_per_day > 0 ? `${growth}, years of room left` : Math.abs(f.growth_per_day) < 1e6 ? 'Not growing' : growth}</span>`;
+  const when = f.days_left < 60 ? `about ${plural(Math.max(1, Math.round(f.days_left)), 'day')}` : f.days_left < 730 ? `about ${Math.round(f.days_left / 30)} months` : `about ${Math.round(f.days_left / 365)} years`;
+  const tone = f.days_left <= 14 ? 'red-text' : f.days_left <= 60 ? 'amber-text' : 'muted';
+  return `<span class="${tone}" style="font-size:12px">${growth}. Full in ${when}.</span>`;
+}
 
 const BACKUP_STATE = {
   ok: ['Backed up', ''], running: ['Backing up now', ''], failed: ['Last backup failed', 'red'],
@@ -597,7 +656,8 @@ function applyOverview(o) {
   Object.assign(S, {
     identity: o.identity || {}, host: o.host, containers: o.containers || [], apps: o.apps || S.apps,
     history: o.history || S.history, events: o.events || [], tailnet: o.tailnet, docker: o.docker || {},
-    build: o.build || {}, owner: o.owner || '', reports: o.reports || S.reports, backups: o.backups || null, loaded: true,
+    build: o.build || {}, owner: o.owner || '', reports: o.reports || S.reports, backups: o.backups || null,
+    storageHealth: o.storage_health || null, jellyfin: o.jellyfin || null, updates: o.updates || { available: 0 }, loaded: true,
   });
 }
 function applyBackups(b) { S.backups = b; render(); }
@@ -674,7 +734,7 @@ async function loadLogs(id, tail = S.logs.key === id ? S.logs.tail : 200) {
 let stream = null;
 function connect() {
   if (net.api) {
-    net.api.subscribe({ tick: applyTick, event: applyEvent, report: onReport, action: onAction, backups: applyBackups });
+    net.api.subscribe({ tick: applyTick, event: applyEvent, report: onReport, action: onAction, backups: applyBackups, schedule: onSchedule });
     S.connected = true;
     return;
   }
@@ -686,6 +746,10 @@ function connect() {
   stream.addEventListener('reports', (e) => { S.reports.unseen = JSON.parse(e.data).unseen; render(); });
   stream.addEventListener('action', (e) => onAction(JSON.parse(e.data)));
   stream.addEventListener('backups', (e) => applyBackups(JSON.parse(e.data)));
+  stream.addEventListener('storage', (e) => { S.storageHealth = JSON.parse(e.data); render(); });
+  stream.addEventListener('jellyfin', (e) => { S.jellyfin = JSON.parse(e.data); render(); });
+  stream.addEventListener('updates', (e) => { S.updates = JSON.parse(e.data); render(); });
+  stream.addEventListener('schedule', (e) => onSchedule(JSON.parse(e.data)));
   stream.onopen = () => { const was = S.connected; S.connected = true; if (!was) loadOverview(); };
   stream.onerror = async () => {
     S.connected = false;
@@ -737,6 +801,9 @@ document.addEventListener('click', async (e) => {
     btn.disabled = true;
     toast('Starting a backup…', 'busy');
     try { applyBackups(await postJSON('api/backups/run')); toast('Backup started. Apps with a database pause for about a minute.', 'ok'); } catch (err) { toast(err.message, 'error'); btn.disabled = false; }
+    return;
+  } else if (action === 'disk-health') {
+    await runTask('disk-health', 'Reading each drive\u2019s health record…');
     return;
   } else if (action === 'run') {
     await askAndRun(btn.dataset.verb, btn.dataset.target);

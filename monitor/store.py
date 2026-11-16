@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS sign_ins (
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sign_ins_time ON sign_ins(time);
+CREATE TABLE IF NOT EXISTS disk_usage (
+    day INTEGER NOT NULL,
+    mount TEXT NOT NULL,
+    used INTEGER NOT NULL,
+    total INTEGER NOT NULL,
+    PRIMARY KEY (day, mount)
+);
 CREATE TABLE IF NOT EXISTS history (
     t INTEGER PRIMARY KEY,
     cpu REAL, mem REAL, temp REAL, rx REAL, tx REAL, watts REAL
@@ -203,6 +210,9 @@ class Store:
         row = self._one("SELECT COUNT(*) AS n FROM failure_reports WHERE seen = 0")
         return row["n"] if row else 0
 
+    def reports_since(self, since: float) -> list[dict]:
+        return self._all("SELECT id, time, kind, target, title FROM failure_reports WHERE time >= ? ORDER BY time", (since,))
+
     def count_reports_since(self, target: str, since: float) -> int:
         row = self._one("SELECT COUNT(*) AS n FROM failure_reports WHERE target = ? AND time >= ?", (target, since))
         return row["n"] if row else 0
@@ -312,6 +322,19 @@ class Store:
     def load_history(self, since: float) -> list[list]:
         rows = self._all("SELECT * FROM history WHERE t >= ? ORDER BY t", (since,))
         return [[r["t"], *(r[f] for f in HISTORY_FIELDS)] for r in rows]
+
+
+    # -------------------------------------------------------------- disk usage
+    def save_disk_usage(self, rows: list[tuple[int, str, int, int]], keep_from: int = 0) -> None:
+        """One row per filesystem per day; a later reading on the same day replaces the earlier one."""
+        with self.lock:
+            self.db.execute("BEGIN")
+            self.db.executemany("INSERT OR REPLACE INTO disk_usage(day, mount, used, total) VALUES(?,?,?,?)", rows)
+            self.db.execute("DELETE FROM disk_usage WHERE day < ?", (keep_from,))
+            self.db.execute("COMMIT")
+
+    def disk_usage_since(self, day: int) -> list[dict]:
+        return self._all("SELECT day, mount, used, total FROM disk_usage WHERE day >= ? ORDER BY day", (day,))
 
 
 def _clean(row: dict) -> dict:

@@ -16,7 +16,7 @@ from typing import Any
 
 from . import __version__
 from . import tailscale
-from .actions import UPDATE_CHECK_EVERY, Actions
+from .actions import Actions
 from .alerts import Alerts
 from .backups import CHECK_EVERY as BACKUPS_EVERY, Backups
 from .apps import AppsFile, build_map
@@ -24,9 +24,12 @@ from .config import Settings
 from .docker_client import DockerClient
 from .history import History
 from .host import HostCollector
+from .jellyfin import POLL_EVERY as JELLYFIN_EVERY, Jellyfin
 from .journal import Journal
 from .logs import LogHub
 from .reports import FailureReports, read_boot_id
+from .schedule import TICK as SCHEDULE_EVERY, Scheduler
+from .storage_health import StorageHealth
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -165,6 +168,9 @@ class Collector:
         self.actions = Actions(self, settings.docker_control_host)
         self.alerts = Alerts(self, settings.ntfy_url, settings.ntfy_token)
         self.backups = Backups(self)
+        self.storage = StorageHealth(self)
+        self.schedule = Scheduler(self)
+        self.jellyfin = Jellyfin(self, settings.jellyfin_url, settings.jellyfin_key)
         self._readings_at = 0.0
         self.boot_id: str | None = None
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
@@ -205,7 +211,10 @@ class Collector:
             asyncio.create_task(self._check_previous_boot(), name="previous-boot"),
             asyncio.create_task(self._update_checks(), name="updates"),
             asyncio.create_task(self._every(BACKUPS_EVERY, self.backups.check), name="backups"),
+            asyncio.create_task(self._every(SCHEDULE_EVERY, self.schedule.tick), name="schedule"),
         ]
+        if self.jellyfin.configured:
+            self._tasks.append(asyncio.create_task(self._every(JELLYFIN_EVERY, self.jellyfin.poll), name="jellyfin"))
         if self.docker:
             self._tasks.append(asyncio.create_task(
                 self.docker.watch_events(self._on_docker_event, self._on_events_state), name="events"))
@@ -217,6 +226,8 @@ class Collector:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         await self.logs.stop()
+        await self.schedule.close()
+        await self.jellyfin.close()
         await self.actions.close()
         await self.alerts.close()
         await self._persist()
@@ -254,6 +265,7 @@ class Collector:
         if s["time"] - self._readings_at >= 30:
             self._save_readings(s)
         self.actions.check_autopilot(s)
+        self.storage.record(s)
         self.apps_file.reload_if_changed()
         self.broadcast("tick", {
             "host": s,
@@ -314,13 +326,17 @@ class Collector:
         self._docker_refresh.set()
 
     async def _update_checks(self) -> None:
-        await asyncio.sleep(60)  # let everything settle after a start
-        while True:
+        """One check soon after a start; after that the daily scheduled task takes over."""
+        await asyncio.sleep(60)  # let everything settle first
+        try:
+            await self.actions.check_updates()
+        except Exception:  # noqa: BLE001
+            log.exception("update check failed")
+        if self.actions.helper.installed and not self.storage.smart()["checked"]:
             try:
-                await self.actions.check_updates()
+                await self.storage.check_smart()
             except Exception:  # noqa: BLE001
-                log.exception("update check failed")
-            await asyncio.sleep(UPDATE_CHECK_EVERY)
+                log.exception("first drive health check failed")
 
     async def _tty_of(self, cid: str) -> bool:
         return bool((await self.docker.inspect(cid)).get("tty"))
@@ -444,6 +460,9 @@ class Collector:
             "build": {"sha": self.settings.git_sha, "version": __version__, "started": self.started},
             "reports": self.reports.summary(),
             "backups": self.backups.view(),
+            "storage_health": self.storage.view(),
+            "jellyfin": self.jellyfin.view(),
+            "updates": {"available": self.actions.updates_available()},
             "power_rate": self.settings.power_rate,
             "owner": self.settings.owner,
         }

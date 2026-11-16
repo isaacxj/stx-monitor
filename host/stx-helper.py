@@ -3,8 +3,9 @@
 
 stx-monitor runs in a container and should never be root on the host. A few
 jobs genuinely need the host, though: shutting down, rebooting, restarting
-Docker, cleaning up images, and pulling and recreating a compose service. This
-small service runs those jobs (and starts a backup), and nothing else, for whoever connects to its
+Docker, cleaning up images, pulling and recreating a compose service, and
+reading each drive's SMART health record. This small service runs those jobs
+(and starts a backup), and nothing else, for whoever connects to its
 Unix socket at /run/stx-helper/helper.sock. Only root can open that socket.
 
 Protocol: the client sends one JSON line, {"cmd": "...", "args": {...}}. The
@@ -18,6 +19,7 @@ Uses only the Python standard library.
 import json
 import os
 import re
+import shutil
 import socket
 import socketserver
 import struct
@@ -26,7 +28,7 @@ import sys
 import threading
 import time
 
-VERSION = 2
+VERSION = 3
 SOCKET_DIR = "/run/stx-helper"
 SOCKET_PATH = os.path.join(SOCKET_DIR, "helper.sock")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -136,6 +138,65 @@ def cmd_backup(args, emit):
     return code == 0, "Backup started" if code == 0 else "\n".join(tail[-2:])
 
 
+SKIP_BLOCK_PREFIXES = ("loop", "ram", "dm-", "zram", "sr", "fd", "md")
+
+
+def _attr(table, attr_id):
+    for row in table:
+        if row.get("id") == attr_id:
+            return (row.get("raw") or {}).get("value")
+    return None
+
+
+def summarize_smart(name, data):
+    """The few SMART numbers stx-monitor shows, from `smartctl --json` output."""
+    out = {"name": name, "model": data.get("model_name"), "supported": True}
+    status = data.get("smart_status")
+    if not status:
+        messages = [m.get("string", "") for m in (data.get("smartctl") or {}).get("messages") or []]
+        out["supported"] = False
+        out["error"] = (messages[0] if messages else "This drive doesn't report SMART health")[:200]
+        return out
+    out["passed"] = status.get("passed")
+    out["temp"] = (data.get("temperature") or {}).get("current")
+    out["hours"] = (data.get("power_on_time") or {}).get("hours")
+    table = (data.get("ata_smart_attributes") or {}).get("table") or []
+    if table:
+        out["reallocated"] = _attr(table, 5)
+        out["pending"] = _attr(table, 197)
+        out["uncorrectable"] = _attr(table, 198)
+    nvme = data.get("nvme_smart_health_information_log")
+    if nvme:
+        out["wear"] = nvme.get("percentage_used")
+        out["media_errors"] = nvme.get("media_errors")
+        out["critical_warning"] = nvme.get("critical_warning")
+    return out
+
+
+def cmd_smart(args, emit):
+    """Read every physical drive's SMART record. The answer is JSON in the detail line."""
+    if not shutil.which("smartctl"):
+        return False, "smartmontools isn't installed. Run scripts/install-helper.sh with sudo."
+    disks = []
+    for name in sorted(os.listdir("/sys/block")):
+        if name.startswith(SKIP_BLOCK_PREFIXES):
+            continue
+        try:
+            with open(f"/sys/block/{name}/size") as f:
+                if int(f.read().strip() or 0) == 0:
+                    continue
+        except (OSError, ValueError):
+            continue
+        emit(f"smartctl /dev/{name}")
+        try:
+            out = subprocess.run(["smartctl", "--json=c", "-H", "-A", "-i", f"/dev/{name}"],
+                                 capture_output=True, text=True, check=False, timeout=45)
+            disks.append(summarize_smart(name, json.loads(out.stdout)))
+        except (subprocess.TimeoutExpired, ValueError):
+            disks.append({"name": name, "supported": False, "error": "smartctl gave no answer for this drive"})
+    return True, json.dumps({"disks": disks}, separators=(",", ":"))
+
+
 COMMANDS = {
     "ping": (cmd_ping, False),
     "poweroff": (cmd_poweroff, True),
@@ -144,6 +205,7 @@ COMMANDS = {
     "prune-images": (cmd_prune_images, True),
     "update": (cmd_update, True),
     "backup": (cmd_backup, False),
+    "smart": (cmd_smart, False),
 }
 
 

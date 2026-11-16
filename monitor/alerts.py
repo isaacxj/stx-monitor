@@ -41,10 +41,12 @@ CATEGORIES = {
     "apps": "An app crashes, runs out of memory or fails its health check",
     "power": "Wall power is lost or back, and autopilot shutdowns",
     "heat": "The CPU runs hot",
-    "storage": "A drive is over 90% full",
+    "storage": "A drive is over 90% full, will fill up within two weeks, or is failing",
     "security": "Sign-ins, failed sign-ins and passkey changes",
     "system": "Docker can't be reached",
     "backups": "A nightly backup fails, or none has finished in 36 hours",
+    "updates": "A newer version of an app is available",
+    "reports": "The weekly report, on Sunday mornings",
 }
 DEFAULT_CATEGORIES = {name: True for name in CATEGORIES}
 
@@ -94,6 +96,8 @@ def classify(ev: dict) -> dict | None:
         if level == "ok":
             return {"category": "backups", "priority": 2, "tags": ["white_check_mark"], "key": "backup:ok"}
         return None
+    if kind == "updates":
+        return {"category": "updates", "priority": 2, "tags": ["arrow_up"], "key": f"updates:{title}"}
     if kind == "system":
         if level == "error":
             return {"category": "system", "priority": 4, "tags": ["warning"], "key": f"system:{title}"}

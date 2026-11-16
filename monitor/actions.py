@@ -35,7 +35,6 @@ SELF_NAME = "stx-monitor"
 HELPER_SOCKET = "run/stx-helper/helper.sock"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 EXPECTED_STOP_WINDOW = 120.0
-UPDATE_CHECK_EVERY = 12 * 3600
 DEFAULT_AUTOPILOT = {"enabled": True, "threshold": 20}
 
 CONTAINER_ACTIONS = ("start", "stop", "restart", "update")
@@ -110,6 +109,8 @@ class Actions:
         self.expected: dict[str, float] = {}
         self.tasks: set[asyncio.Task] = set()
         self.updates: dict[str, dict] = {}
+        self._announced: set[str] = set()
+        self.update_pause = 1.0
         self._low_battery_samples = 0
         self.autopilot_fired = False
         self.store.fail_running_actions("Cut off: stx-monitor restarted while it was running")
@@ -324,11 +325,15 @@ class Actions:
             await asyncio.to_thread(self.c.history.save, self.store)
 
     # ------------------------------------------------------------------ updates
-    async def check_updates(self) -> None:
-        """Ask the registry whether each running image has a newer version under the same tag."""
+    async def check_updates(self) -> int:
+        """Ask the registry whether each running image has a newer version under the same tag.
+
+        Returns how many apps have an update waiting, and records one event
+        naming any that are new since the last check.
+        """
         docker = self.c.docker
         if not docker:
-            return
+            return 0
         for c in list(self.c.containers):
             ref = c.get("image") or ""
             if c["state"] != "running" or not ref or ref.startswith("sha256:") or self.is_protected(c):
@@ -344,7 +349,26 @@ class Actions:
             except Exception as exc:  # noqa: BLE001
                 entry["error"] = str(exc)[:200]
             self.updates[c["id"]] = entry
-            await asyncio.sleep(1)  # be gentle with registry rate limits
+            await asyncio.sleep(self.update_pause)  # be gentle with registry rate limits
+        live = {c["id"]: c for c in self.c.containers}
+        self.updates = {cid: u for cid, u in self.updates.items() if cid in live}
+        waiting = {cid for cid, u in self.updates.items() if u.get("available")}
+        fresh = sorted(self._display(live[cid]) for cid in waiting - self._announced)
+        self._announced = waiting
+        if fresh:
+            self.c.add_event({"kind": "updates", "level": "info",
+                              "title": f"Update available for {', '.join(fresh)}" if len(fresh) <= 3
+                              else f"Updates available for {len(fresh)} apps",
+                              "detail": "Install from Control, or turn on Install app updates under Scheduled tasks."})
+        self.c.broadcast("updates", {"available": len(waiting)})
+        return len(waiting)
+
+    def _display(self, c: dict) -> str:
+        app = self.c.app_for_container(c["id"])
+        return app["name"] if app else c["name"]
+
+    def updates_available(self) -> int:
+        return sum(1 for u in self.updates.values() if u.get("available"))
 
     # ------------------------------------------------------------------- view
     async def control_view(self) -> dict:
@@ -367,6 +391,7 @@ class Actions:
             "autopilot": self.autopilot(),
             "alerts": self.c.alerts.view(),
             "prune_bytes": prune,
+            "schedule": self.c.schedule.view(),
             "history": self.store.list_actions(40),
             "hostname": self.c.host.identity.get("hostname"),
         }
