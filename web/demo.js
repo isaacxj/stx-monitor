@@ -34,7 +34,8 @@ const PLAN = [
   ['qbittorrent', 'qBittorrent', 'media', 'Downloads, only through the VPN', 8081, ['gluetun']],
   ['gluetun', 'Gluetun', 'media', 'VPN tunnel for downloads', null, []],
   ['bazarr', 'Bazarr', 'media', 'Fetches subtitles', 6767, ['sonarr', 'radarr']],
-  ['opengym', 'openGym', 'personal', 'Gym tracker for my iPhone', null, []],
+  ['flextrack-web', 'FlexTrack', 'personal', 'My gym tracker, in pounds, served to my phone over Tailscale', 8080, ['flextrack-api']],
+  ['flextrack-api', 'FlexTrack API', 'personal', 'Sign-in, sync and workout data, stored as JSON in ~/opengym/data', 3000, []],
 ].map(([id, name, group, description, port, links]) => ({ id, name, group, description, port, url: null, links }));
 
 const CONTAINERS = {
@@ -44,6 +45,8 @@ const CONTAINERS = {
   sonarr: { id: 'd0e7a3b5c911', name: 'sonarr', image: 'lscr.io/linuxserver/sonarr:latest', cpu: 2.0, mem: 180e6, up: 26 * 60 },
   prowlarr: { id: 'e12f9b7c4d30', name: 'prowlarr', image: 'lscr.io/linuxserver/prowlarr:latest', cpu: 1.1, mem: 140e6, up: 2 * 86400 + 6 * 3600 },
   radarr: { id: 'f5a8c2e19b47', name: 'radarr', image: 'lscr.io/linuxserver/radarr:latest', down: true, stoppedAgo: 12 * 60, ranFor: 27 * 3600 },
+  'flextrack-web': { id: 'a7e3c9f01b42', name: 'flextrack-web', image: 'flextrack-web:latest', cpu: 0.02, mem: 11e6, up: 9 * 86400 },
+  'flextrack-api': { id: 'b4d18e2c7a93', name: 'flextrack-api', image: 'flextrack-api:latest', cpu: 0.1, mem: 58e6, up: 9 * 86400 },
 };
 
 const state = {
@@ -273,7 +276,7 @@ const backups = {
     { name: 'jellyfin', size: 2.31 * GiB_, sqlite: true, pause: true },
     { name: 'sonarr', size: 412 * 1024 ** 2, sqlite: true, pause: true },
     { name: 'radarr', size: 288 * 1024 ** 2, sqlite: true, pause: true },
-    { name: 'opengym-api-1', size: 61 * 1024 ** 2, sqlite: false, pause: true },
+    { name: 'flextrack-api', size: 61 * 1024 ** 2, sqlite: false, pause: true },
     { name: 'stx-monitor', size: 38 * 1024 ** 2, sqlite: true, pause: true },
     { name: 'adguard', size: 24 * 1024 ** 2, sqlite: false, pause: false },
     { name: 'prowlarr', size: 19 * 1024 ** 2, sqlite: true, pause: true },
