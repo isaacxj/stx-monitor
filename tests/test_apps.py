@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 from monitor.apps import AppsFile, app_status, build_map, parse_apps
 
 PLAN = {
@@ -66,10 +68,41 @@ def test_shipped_apps_yaml_loads():
     f = AppsFile(Path(__file__).resolve().parent.parent / "config" / "apps.yaml")
     assert f.error is None
     ids = {a["id"] for a in f.apps}
-    assert {"stx-monitor", "jellyfin", "gluetun", "opengym", "ntfy", "caddy"} <= ids
+    assert {"stx-monitor", "jellyfin", "gluetun", "flextrack-web", "flextrack-api", "ntfy", "caddy"} <= ids
+    assert "opengym" not in ids  # FlexTrack replaced the planned openGym
     assert [g["name"] for g in f.groups] == ["Infrastructure", "Media", "Personal apps", "Monitoring"]
     for a in f.apps:  # every link points at a real app
         assert set(a["links"]) <= ids
+
+
+SHIPPED = Path(__file__).resolve().parent.parent / "config" / "apps.yaml"
+
+
+def test_flextrack_is_a_personal_app_with_its_api_linked():
+    f = AppsFile(SHIPPED)
+    apps = {a["id"]: a for a in f.apps}
+    web, api = apps["flextrack-web"], apps["flextrack-api"]
+    assert web["group"] == api["group"] == "personal"
+    assert web["name"] == "FlexTrack" and web["description"] and api["description"]
+    assert web["port"] == 8080 and api["port"] == 3000
+    assert web["url"].startswith("https://")
+    assert web["links"] == ["flextrack-api"]
+
+
+def test_flextrack_matches_by_label_and_shows_unhealthy_and_stopped():
+    groups, apps = parse_apps(yaml.safe_load(SHIPPED.read_text()))
+    # Compose's own names, so only the stx.app labels can match them
+    containers = [
+        c("w1", "opengym-web-1", labels={"stx.app": "flextrack-web", "stx.group": "personal"}, health="unhealthy"),
+        c("a1", "opengym-api-1", state="exited", labels={"stx.app": "flextrack-api", "stx.group": "personal"}),
+    ]
+    m = build_map(groups, apps, containers, {})
+    personal = next(g for g in m["groups"] if g["id"] == "personal")
+    status = {a["id"]: a["status"] for a in personal["apps"]}
+    assert status == {"flextrack-web": "unhealthy", "flextrack-api": "down"}
+    assert ["flextrack-web", "flextrack-api"] in m["links"]
+    assert all(not a.get("unlisted") for g in m["groups"] for a in g["apps"])
+    assert m["counts"]["down"] == 2
 
 
 def test_apps_file_reload_and_errors(tmp_path):

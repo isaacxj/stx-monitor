@@ -131,8 +131,19 @@ apps:
     links: [sonarr, radarr]
 
   # Personal apps
-  - id: opengym
-    name: openGym
+  # FlexTrack's containers carry stx.app labels (~/opengym/docker-compose.yml).
+  - id: flextrack-web
+    name: FlexTrack
     group: personal
-    description: Gym tracker for my iPhone
-    container: opengym
+    description: My gym tracker, in pounds, served to my phone over Tailscale
+    port: 8080
+    url: https://stx-server.tail697f1f.ts.net:8443
+    container: flextrack-web
+    links: [flextrack-api]
+
+  - id: flextrack-api
+    name: FlexTrack API
+    group: personal
+    description: Sign-in, sync and workout data, stored as JSON in ~/opengym/data
+    port: 3000
+    container: flextrack-api
