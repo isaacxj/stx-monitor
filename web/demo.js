@@ -57,7 +57,7 @@ function containerList() {
     state: c.down ? 'exited' : 'running',
     status: c.down ? `Exited (137) ${Math.round((c.stoppedAgo + (now() - T0)) / 60)} minutes ago` : `Up ${Math.round(c.up / 3600) || 1} hours`,
     health: null, created: Math.round(now() - 3 * 86400), ports: [], labels: {},
-    compose_project: 'stx', compose_service: c.name,
+    compose_project: 'stx', compose_service: c.name, update: updates[c.id] || null,
     stats: c.down ? null : { cpu: +(c.cpu * (0.8 + rnd() * 0.4)).toFixed(2), mem: Math.round(c.mem * (0.97 + rnd() * 0.06)), mem_limit: c.name === 'radarr' ? 2 * GiB : 16.6e9 },
   }));
 }
@@ -125,10 +125,11 @@ function host() {
     ],
     mounts: [
       { mountpoint: '/', device: '/dev/mapper/ubuntu--vg-ubuntu--lv', fstype: 'ext4', readonly: false, block: 'dm-0', total: 113 * GiB, used: 18.2 * GiB, free: 89 * GiB, percent: 16.1 },
+      { mountpoint: '/srv/data', device: '/dev/sdb1', fstype: 'ext4', readonly: false, block: 'sdb1', total: 916 * GiB, used: 612 * GiB, free: 257 * GiB, percent: 70.4 },
     ],
     disks: [
       { name: 'sda', model: 'SanDisk X600', size: 128e9, kind: 'ssd', usb: false, removable: false, partitions: ['sda1', 'sda2', 'sda3'], filesystems: ['ext4', 'LVM2_member', 'vfat'], mounts: ['/'], state: 'mounted' },
-      { name: 'sdb', model: 'ST1000LM035-1RK172', size: 1000204886016, kind: 'hdd', usb: false, removable: false, partitions: [], filesystems: [], mounts: [], state: 'not mounted' },
+      { name: 'sdb', model: 'ST1000LM035-1RK172', size: 1000204886016, kind: 'hdd', usb: false, removable: false, partitions: ['sdb1'], filesystems: ['ext4'], mounts: ['/srv/data'], state: 'mounted' },
       { name: 'sdc', model: 'Samsung Portable SSD T7', size: 1000204886016, kind: 'ssd', usb: true, removable: false, partitions: [], filesystems: [], mounts: [], state: 'not mounted' },
     ],
     disk_io: { sda: { read_rate: Math.round(0.4e6 * (0.5 + rnd())), write_rate: Math.round(1.2e6 * (0.5 + rnd())) }, sdb: { read_rate: 0, write_rate: 0 }, sdc: { read_rate: 0, write_rate: 0 } },
@@ -283,21 +284,58 @@ const backups = {
 };
 const alerts = {
   configured: true, server: 'ntfy.sh', topic_hint: 'stx…9q',
-  categories: { apps: true, power: true, heat: true, storage: true, security: true, system: false, backups: true },
+  categories: { apps: true, power: true, heat: true, storage: true, security: true, system: false, backups: true, updates: true, reports: true },
   descriptions: {
     apps: 'An app crashes, runs out of memory or fails its health check',
     power: 'Wall power is lost or back, and autopilot shutdowns',
     heat: 'The CPU runs hot',
-    storage: 'A drive is over 90% full',
+    storage: 'A drive is over 90% full, will fill up within two weeks, or is failing',
     security: 'Sign-ins, failed sign-ins and passkey changes',
     system: "Docker can't be reached",
     backups: 'A nightly backup fails, or none has finished in 36 hours',
+    updates: 'A newer version of an app is available',
+    reports: 'The weekly report, on Sundays',
   },
   last_sent: { time: T0 - 26 * 60 - 5, title: 'sonarr stopped' }, last_error: null,
 };
 // ?demo&signin starts on the sign-in page.
 let signedIn = !new URLSearchParams(location.search).has('signin');
 const updates = { c94d1f0a6b22: { available: true, checked: T0 - 3600 } };
+const storageHealth = {
+  forecast: {
+    '/': { days_of_data: 30, growth_per_day: 38e6, days_left: null },
+    '/srv/data': { days_of_data: 30, growth_per_day: 6.1 * GiB_, days_left: 42 },
+  },
+  smart: {
+    checked: T0 - 5 * 3600, error: null, helper: true, checking: false,
+    disks: [
+      { name: 'sda', model: 'SanDisk X600', supported: true, passed: true, temp: 38, hours: 9120, reallocated: 0, pending: 0, uncorrectable: 0, state: 'ok', sentence: 'Healthy.' },
+      { name: 'sdb', model: 'ST1000LM035-1RK172', supported: true, passed: true, temp: 34, hours: 21480, reallocated: 8, pending: 0, uncorrectable: 0, state: 'warn', sentence: '8 sectors have been replaced by spares. It still works, but drives often get worse from here.' },
+    ],
+  },
+};
+const jellyfin = {
+  configured: true, ok: true, error: null,
+  sessions: [
+    { id: 's1', user: 'isaac', device: 'Toshiba Fire TV', client: 'Netflixx', title: 'The Lighthouse Keeper', subtitle: '2023', kind: 'Movie', paused: false, position: 41 * 60 + 12, runtime: 112 * 60, mode: 'direct', label: 'Direct play', reasons: [] },
+    { id: 's2', user: 'guest', device: 'iPhone', client: 'Jellyfin iOS', title: 'Harbor Lights S02E05', subtitle: 'Low Tide', kind: 'Episode', paused: false, position: 9 * 60 + 40, runtime: 44 * 60, mode: 'hardware', label: 'Transcoding on Quick Sync', reasons: ['ContainerBitrateExceedsLimit'] },
+  ],
+};
+const dueAt = (h, m = 0, plusDays = 1) => { const d = new Date(); d.setDate(d.getDate() + plusDays); d.setHours(h, m, 0, 0); return d.getTime() / 1000; };
+const schedule = {
+  timezone: 'America/Chicago',
+  report: { time: T0 - 2 * 86400, title: 'Weekly report: 1 thing to look at', problems: ['crashes'], lines: [
+    'Apps: 5 of 6 running, 3 crashes this week (3 radarr).', 'Server: up 2 days.', 'Backups: 7 good runs this week.',
+    'Disks: / 16% full; /srv/data 70% full, full in about 42 days.', 'Drive health: sdb shows wear.', 'Updates: 1 app can be updated.'] },
+  tasks: [
+    { id: 'backup', name: 'Back up app data', description: '', when: 'Every day at 3:00 AM', managed: true, installed: true, running: false, last_run: T0 - 7 * 3600, ok: true, detail: '' },
+    { id: 'check-updates', name: 'Check for app updates', description: '', when: 'Every day at 4:30 AM', enabled: true, unavailable: '', running: false, next_run: dueAt(4, 30), last_run: T0 - 5.5 * 3600, ok: true, detail: '1 update available' },
+    { id: 'update-apps', name: 'Install app updates', description: '', when: 'Mondays at 5:00 AM', enabled: false, unavailable: '', running: false, next_run: null, last_run: null, ok: null, detail: '' },
+    { id: 'prune-images', name: 'Clean up unused images', description: '', when: 'Sundays at 4:00 AM', enabled: true, unavailable: '', running: false, next_run: dueAt(4, 0, 5), last_run: T0 - 2.2 * 86400, ok: true, detail: 'Freed 1.4GB' },
+    { id: 'disk-health', name: 'Check drive health', description: '', when: 'Every day at 6:00 AM', enabled: true, unavailable: '', running: false, next_run: dueAt(6), last_run: T0 - 5 * 3600, ok: true, detail: '2 drives checked, 1 needs attention' },
+    { id: 'weekly-report', name: 'Weekly report', description: '', when: 'Sundays at 9:00 AM', enabled: true, unavailable: '', running: false, next_run: dueAt(9, 0, 5), last_run: T0 - 2 * 86400, ok: true, detail: 'Sent to your phone' },
+  ],
+};
 
 function controlView() {
   const prot = new Set(['stx-monitor', 'stx-docker-proxy']);
@@ -308,7 +346,7 @@ function controlView() {
       const actions = c.state === 'running' ? (prot.has(c.name) ? ['restart'] : ['restart', 'stop', 'update']) : ['start'];
       return { id: c.id, name: c.name, app: app?.id, display: app?.name || c.name, state: c.state, status: c.status, health: null, protected: prot.has(c.name), actions, update: updates[c.id] || null };
     }),
-    autopilot, alerts, prune_bytes: 3.2 * GiB, history: HISTORY, hostname: 'stx-server',
+    autopilot, alerts, schedule, prune_bytes: 3.2 * GiB, history: HISTORY, hostname: 'stx-server',
   };
 }
 
@@ -338,6 +376,7 @@ export function createDemo() {
           owner: 'Isaac',
           reports: { unseen: REPORTS.filter((r) => !r.seen).length, recent: REPORTS.map(({ data, ...r }) => ({ ...r, cause: data.cause })) },
           backups,
+          storage_health: storageHealth, jellyfin, updates: { available: 1 },
         };
       }
       if (path.startsWith('api/session')) {
@@ -406,6 +445,25 @@ export function createDemo() {
           this.handlers?.backups?.({ ...backups });
         }, 4000);
         return { ...backups };
+      }
+      if (path === 'api/schedule') {
+        const t = schedule.tasks.find((x) => x.id === body.task);
+        Object.assign(t, { enabled: body.enabled, next_run: body.enabled ? dueAt(5) : null });
+        return schedule;
+      }
+      if (path === 'api/schedule/run') {
+        const t = schedule.tasks.find((x) => x.id === body.task);
+        const row = { id: HISTORY.length + 1, started: now(), actor: 'isaac', device: 'iPhone, Safari', action: body.task, target: 'server', status: 'running', detail: '' };
+        HISTORY.unshift(row);
+        t.running = true;
+        this.handlers?.schedule?.(schedule);
+        setTimeout(() => {
+          Object.assign(t, { running: false, last_run: now(), ok: true, detail: t.detail || 'Done (demo: nothing really happened)' });
+          Object.assign(row, { status: 'ok', finished: now(), detail: t.detail });
+          this.handlers?.schedule?.(schedule);
+          this.handlers?.action?.({ ...row });
+        }, 2500);
+        return { started: true };
       }
       if (path === 'api/alerts') { Object.assign(alerts.categories, body.categories); return alerts; }
       if (path === 'api/alerts/test') { alerts.last_sent = { time: now(), title: 'Test alert from stx-monitor' }; return alerts; }

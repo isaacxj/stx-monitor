@@ -58,6 +58,10 @@ class Settings:
     # access token if the ntfy server needs one. Empty turns alerts off.
     ntfy_url: str
     ntfy_token: str
+    # Jellyfin now playing: an API key from Jellyfin's Dashboard (API Keys). Empty turns it off.
+    # The address defaults to http://127.0.0.1:8096.
+    jellyfin_url: str
+    jellyfin_key: str
     # Development only: turn sign-in off, or allow the session cookie over plain HTTP.
     auth_disabled: bool
     insecure_cookie: bool
@@ -83,6 +87,8 @@ def load() -> Settings:
         public_url=os.environ.get("STX_PUBLIC_URL", "").rstrip("/"),
         ntfy_url=os.environ.get("STX_NTFY_URL", "").strip(),
         ntfy_token=os.environ.get("STX_NTFY_TOKEN", "").strip(),
+        jellyfin_url=os.environ.get("STX_JELLYFIN_URL", "").strip(),
+        jellyfin_key=os.environ.get("STX_JELLYFIN_KEY", "").strip(),
         auth_disabled=os.environ.get("STX_AUTH", "on").lower() in ("off", "0", "false", "no"),
         insecure_cookie=os.environ.get("STX_INSECURE_COOKIE", "").lower() in ("1", "true", "yes"),
     )

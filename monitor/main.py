@@ -398,6 +398,11 @@ class AlertsBody(BaseModel):
     categories: dict[str, bool]
 
 
+class ScheduleBody(BaseModel):
+    task: str
+    enabled: bool | None = None
+
+
 @app.get("/api/control")
 async def control(request: Request) -> dict:
     return await collector(request).actions.control_view()
@@ -434,6 +439,33 @@ async def test_alert(request: Request) -> dict:
         return await collector(request).alerts.send_test()
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/schedule")
+async def set_schedule(request: Request, body: ScheduleBody) -> dict:
+    """Turn a scheduled task on or off."""
+    if body.enabled is None:
+        raise HTTPException(400, "enabled is required")
+    user, device = actor(request)
+    try:
+        return collector(request).schedule.set_enabled(body.task[:64], body.enabled, user, device)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/schedule/run", status_code=202)
+async def run_scheduled(request: Request, body: ScheduleBody) -> dict:
+    """Run a scheduled task now. Progress arrives as "action" messages on the live stream."""
+    user, device = actor(request)
+    try:
+        return collector(request).schedule.request(body.task[:64], user, device)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/storage")
+async def storage_health(request: Request) -> dict:
+    return collector(request).storage.view()
 
 
 @app.get("/api/backups")
